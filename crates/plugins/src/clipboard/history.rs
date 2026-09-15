@@ -3,21 +3,22 @@
 //!
 //! [`ClipboardHistory`] owns the ordered entry list (newest first), dedupes
 //! entries, filters them for the `clip:` query and round-trips itself to a
-//! simple JSON file (`Vec<String>`, newest first). Persistence is a thin slice
+//! JSON file of `{"text", "timestamp"}` objects (newest first). Persistence is a thin slice
 //! of [`std::fs`] with an atomic replace (write to a sibling temp file, then
 //! `rename`) so an interrupted write never corrupts the live file.
 //!
 //! The type is deliberately independent of GTK *and* of the clipboard backend:
-//! everything is testable with plain in-memory strings. It has no own clock
-//! and no timestamps — Chrome/`xclip -selection clipboard -o` style tools that
-//! echo the clipboard can create identical text at different times, and the
-//! dedup rule (drop consecutive duplicates, move re-copies to the front)
-//! matches typical clipboard-manager behaviour without needing one.
+//! everything is testable with plain in-memory strings. Entries carry capture
+//! timestamps (seconds since the Unix epoch) so an optional retention can
+//! prune by age and the `clip:` plugin can show how long ago something was
+//! copied. The dedup rule (drop consecutive duplicates, move re-copies to the
+//! front) matches typical clipboard-manager behaviour.
 
 use std::collections::VecDeque;
 use std::fs;
 use std::io::Result as IoResult;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Default bound on the number of entries kept in memory and on disk.
 pub const DEFAULT_HISTORY_LIMIT: usize = 50;
@@ -29,11 +30,35 @@ pub const HISTORY_FILE_NAME: &str = "clipboard_history.json";
 ///
 /// Index `0` is the most recent copy. `add` never stores the empty string and
 /// never stores a consecutive duplicate; a duplicate of an older entry is
-/// moved to the front instead of being added twice.
+/// moved to the front instead of being added twice. Entries carry capture
+/// timestamps and are pruned by age when a retention is set (see
+/// [`ClipboardHistory::set_retention_seconds`]).
 #[derive(Debug, Clone)]
 pub struct ClipboardHistory {
-    entries: VecDeque<String>,
+    entries: VecDeque<ClipboardEntry>,
     max_len: usize,
+    retention_seconds: Option<u64>,
+}
+
+/// One clipboard entry: the copied text and when it was captured (seconds
+/// since the Unix epoch). The timestamp drives retention-based pruning and
+/// the plugin's "copied X ago" age hint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardEntry {
+    /// The copied text, verbatim.
+    pub text: String,
+    /// When the entry was recorded, seconds since the Unix epoch.
+    pub timestamp: u64,
+}
+
+/// The current wall-clock time in whole seconds since the Unix epoch, used
+/// for capture timestamps and retention pruning. `0` only if the clock is
+/// before the epoch — never in practice.
+fn clock_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
 }
 
 /// What [`load_into`] found on disk.
@@ -64,6 +89,7 @@ impl ClipboardHistory {
         Self {
             entries: VecDeque::new(),
             max_len: max_len.max(1),
+            retention_seconds: None,
         }
     }
 
@@ -71,6 +97,36 @@ impl ClipboardHistory {
     #[must_use]
     pub fn max_len(&self) -> usize {
         self.max_len
+    }
+
+    /// The retention duration in seconds, if any. `None` keeps the history
+    /// memory-only — no age pruning and nothing persisted by the monitor.
+    #[must_use]
+    pub fn retention_seconds(&self) -> Option<u64> {
+        self.retention_seconds
+    }
+
+    /// Set the retention duration in whole seconds. `None` disables age
+    /// pruning (a session-only, in-memory history). Setting a value prunes
+    /// entries that already exceed it.
+    pub fn set_retention_seconds(&mut self, retention: Option<u64>) {
+        self.retention_seconds = retention;
+        if retention.is_some() {
+            self.prune();
+        }
+    }
+
+    /// Drop entries older than the configured retention. No-op without one.
+    /// Pruning happens lazily on every read/write path, so expired entries
+    /// never linger past the next access.
+    pub fn prune(&mut self) {
+        self.prune_at(clock_now());
+    }
+
+    fn prune_at(&mut self, now: u64) {
+        let Some(retention) = self.retention_seconds else { return };
+        self.entries
+            .retain(|entry| entry.timestamp.saturating_add(retention) > now);
     }
 
     /// Number of stored entries (never exceeds [`Self::max_len`]).
@@ -95,16 +151,26 @@ impl ClipboardHistory {
     /// The exact copied text is preserved (no trimming). On duplicate removal
     /// the previous occurrence is dropped and the text put back at the front.
     pub fn add(&mut self, text: &str) -> bool {
+        self.add_at(text, clock_now())
+    }
+
+    /// Record a copied text with an explicit capture timestamp (used when
+    /// re-hydrating persisted entries and in deterministic tests).
+    pub fn add_at(&mut self, text: &str, timestamp: u64) -> bool {
+        self.prune();
         if text.is_empty() {
             return false;
         }
-        if self.entries.front().is_some_and(|front| front == text) {
+        if self.entries.front().is_some_and(|front| front.text == text) {
             return false;
         }
-        if let Some(position) = self.entries.iter().position(|entry| entry == text) {
+        if let Some(position) = self.entries.iter().position(|entry| entry.text == text) {
             self.entries.remove(position);
         }
-        self.entries.push_front(text.to_owned());
+        self.entries.push_front(ClipboardEntry {
+            text: text.to_owned(),
+            timestamp,
+        });
         while self.entries.len() > self.max_len {
             self.entries.pop_back();
         }
@@ -114,12 +180,12 @@ impl ClipboardHistory {
     /// The entry at `index` (0 = most recent), if any.
     #[must_use]
     pub fn get(&self, index: usize) -> Option<&str> {
-        self.entries.get(index).map(String::as_str)
+        self.entries.get(index).map(|entry| entry.text.as_str())
     }
 
     /// All entries, most recent first.
     pub fn entries(&self) -> impl Iterator<Item = &str> {
-        self.entries.iter().map(String::as_str)
+        self.entries.iter().map(|entry| entry.text.as_str())
     }
 
     /// Entries containing `query`, case-insensitively, newest first.
@@ -127,15 +193,38 @@ impl ClipboardHistory {
     /// An empty query matches everything. The lookup is a plain substring
     /// scan — 50 short strings per keystroke, cheap enough to run while the
     /// user types. Returns *owned* strings so callers don't have to keep the
-    /// history's lock alive.
+    /// history's lock alive. Expired entries are pruned first.
     #[must_use]
-    pub fn search(&self, query: &str) -> Vec<String> {
+    pub fn search(&mut self, query: &str) -> Vec<String> {
+        self.search_entries(query)
+            .into_iter()
+            .map(|entry| entry.text)
+            .collect()
+    }
+
+    /// Like [`Self::search`], but returns the full entries (text + capture
+    /// timestamp) so callers can display how old a result is.
+    #[must_use]
+    pub fn search_entries(&mut self, query: &str) -> Vec<ClipboardEntry> {
+        self.prune();
         let needle = query.to_lowercase();
         self.entries
             .iter()
-            .filter(|entry| entry.to_lowercase().contains(&needle))
+            .filter(|entry| entry.text.to_lowercase().contains(&needle))
             .cloned()
             .collect()
+    }
+
+    /// The clipboard sink (write target) associated with this history.
+    ///
+    /// The GTK window writes copy actions (e.g. `PluginAction::Copy`) to it.
+    /// The real system clipboard is owned by the window's display connection,
+    /// so this placeholder holds that reference's place in the pure, GTK-free
+    /// model layer; the window shares its own handle instead. `()` keeps the
+    /// history testable without any clipboard object.
+    #[must_use]
+    pub fn sink() -> () {
+        ()
     }
 
     /// Drop every entry.
@@ -144,23 +233,67 @@ impl ClipboardHistory {
     }
 
     /// Serialise the history to the persistence format: a JSON array of
-    /// strings, newest first. `VecDeque<String>` serialisation cannot fail.
+    /// `{"text", "timestamp"}` objects, newest first. `VecDeque` serialisation
+    /// cannot fail.
     fn to_json(&self) -> String {
-        serde_json::to_string(&self.entries).expect("serializing Vec<String> cannot fail")
+        let value = serde_json::json!(self
+            .entries
+            .iter()
+            .map(|entry| serde_json::json!({ "text": entry.text, "timestamp": entry.timestamp }))
+            .collect::<Vec<_>>());
+        serde_json::to_string(&value).expect("serializing clipboard history cannot fail")
     }
 
     /// Replace the contents from persisted JSON. `false` when the text is not
-    /// a well-formed JSON array of strings — the history is then left as-is.
+    /// a well-formed history file — the history is then left as-is.
+    ///
+    /// Two formats are accepted: the current object form
+    /// (`[{"text": "…", "timestamp": 1710000000}, …]`) and the legacy string
+    /// array (`["…", …]`), whose entries are treated as freshly copied.
     pub fn from_json(&mut self, json: &str) -> bool {
-        let entries: Vec<String> = match serde_json::from_str(json) {
-            Ok(entries) => entries,
+        let parsed = match serde_json::from_str(json) {
+            Ok(parsed) => parsed,
             Err(_) => return false,
         };
+        let now = clock_now();
+        let entries: Vec<ClipboardEntry> = match parsed {
+            serde_json::Value::Array(items) => {
+                let mut entries = Vec::with_capacity(items.len());
+                for item in items {
+                    let entry = match item {
+                        serde_json::Value::String(text) => ClipboardEntry {
+                            text,
+                            timestamp: now,
+                        },
+                        serde_json::Value::Object(fields) => {
+                            let Some(text) = fields.get("text").and_then(|value| value.as_str())
+                            else {
+                                return false;
+                            };
+                            let timestamp = fields
+                                .get("timestamp")
+                                .and_then(|value| value.as_u64())
+                                .unwrap_or(now);
+                            ClipboardEntry {
+                                text: text.to_owned(),
+                                timestamp,
+                            }
+                        }
+                        _ => return false,
+                    };
+                    entries.push(entry);
+                }
+                entries
+            }
+            _ => return false,
+        };
         self.entries.clear();
-        self.entries.extend(entries.into_iter().filter(|entry| !entry.is_empty()));
+        self.entries
+            .extend(entries.into_iter().filter(|entry| !entry.text.is_empty()));
         while self.entries.len() > self.max_len {
             self.entries.pop_back();
         }
+        self.prune_at(now);
         true
     }
 
@@ -336,7 +469,7 @@ mod tests {
 
     #[test]
     fn search_filters_substrings_preserving_order() {
-        let history = history(&["rust bindings", "web dev", "Rust playground", "terminal"]);
+        let mut history = history(&["rust bindings", "web dev", "Rust playground", "terminal"]);
         assert_eq!(history.search("rust"), ["Rust playground", "rust bindings"]);
     }
 
@@ -344,7 +477,7 @@ mod tests {
     fn search_is_case_insensitive() {
         // add() keeps newest-first, so the internal order is:
         // ["ugol-rest", "GOLang", "Rust Lang"].
-        let history = history(&["Rust Lang", "GOLang", "ugol-rest"]);
+        let mut history = history(&["Rust Lang", "GOLang", "ugol-rest"]);
         assert_eq!(history.search("RUST"), ["Rust Lang"]);
         assert_eq!(history.search("go"), ["ugol-rest", "GOLang"]);
         assert_eq!(history.search("gO"), ["ugol-rest", "GOLang"]);
@@ -353,7 +486,7 @@ mod tests {
     #[test]
     fn search_with_an_empty_query_matches_everything() {
         // add() keeps newest-first, so the order is ["b", "a"].
-        let history = history(&["a", "b"]);
+        let mut history = history(&["a", "b"]);
         assert_eq!(history.search(""), ["b", "a"]);
     }
 
@@ -480,5 +613,100 @@ mod tests {
         let path = default_data_dir();
         assert!(path.file_name().is_some_and(|name| name == "launcher"));
         assert_eq!(default_history_path().file_name(), Some(std::ffi::OsStr::new(HISTORY_FILE_NAME)));
+    }
+
+    #[test]
+    fn entries_carry_capture_timestamps() {
+        let mut history = ClipboardHistory::new();
+        history.add_at("first", 1_000);
+        history.add_at("second", 2_000);
+        assert_eq!(history.get(0), Some("second"));
+        let entries = history.search_entries("");
+        assert_eq!(entries[0].text, "second");
+        assert_eq!(entries[0].timestamp, 2_000);
+        assert_eq!(entries[1].text, "first");
+        assert_eq!(entries[1].timestamp, 1_000);
+    }
+
+    #[test]
+    fn retention_prunes_entries_older_than_the_window() {
+        // `add_at`/`set_retention_seconds` eagerly prune against the wall
+        // clock, so the entries are placed relative to it: one well short of
+        // the retention window, one far beyond it.
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let mut history = ClipboardHistory::with_limit(10);
+        history.add_at("old", now.saturating_sub(100_000));
+        history.add_at("still fresh", now.saturating_sub(4_000));
+        history.set_retention_seconds(Some(86_400));
+        history.prune_at(now);
+        assert_eq!(history.entries().collect::<Vec<_>>(), ["still fresh"]);
+    }
+
+    #[test]
+    fn retention_prunes_on_access_not_only_at_set_time() {
+        let mut history = ClipboardHistory::with_limit(10);
+        history.add_at("old", 1_000);
+        history.add_at("fresh", 1_000_000);
+        history.set_retention_seconds(Some(86_400));
+        history.prune_at(2_000_000_000);
+        let remaining: Vec<&str> = history.entries().collect();
+        assert!(remaining.is_empty(), "everything aged past the retention window");
+        assert!(history.is_empty());
+    }
+
+    #[test]
+    fn disabling_retention_stops_pruning() {
+        let mut history = ClipboardHistory::with_limit(10);
+        history.add_at("kept", 1_000);
+        history.set_retention_seconds(Some(1));
+        history.prune_at(1_000_500);
+        assert_eq!(history.entries().count(), 0);
+        history.set_retention_seconds(None);
+        history.add_at("again", 1_001);
+        history.prune_at(4_000_000_000);
+        assert_eq!(history.entries().collect::<Vec<_>>(), ["again"]);
+    }
+
+    #[test]
+    fn a_session_like_history_without_retention_never_prunes() {
+        let mut history = ClipboardHistory::new();
+        history.add_at("forever", 1);
+        history.prune_at(4_000_000_000);
+        assert_eq!(history.entries().collect::<Vec<_>>(), ["forever"]);
+    }
+
+    #[test]
+    fn object_json_round_trips_with_timestamps() {
+        let mut history = ClipboardHistory::new();
+        history.add_at("a", 1_000);
+        history.add_at("b", 2_000);
+        let json = history.to_json();
+        let mut loaded = ClipboardHistory::new();
+        assert!(loaded.from_json(&json));
+        assert_eq!(loaded.entries().collect::<Vec<_>>(), ["b", "a"]);
+        let entries = loaded.search_entries("");
+        assert_eq!(entries[0].timestamp, 2_000);
+        assert_eq!(entries[1].timestamp, 1_000);
+    }
+
+    #[test]
+    fn legacy_string_arrays_load_as_fresh_entries() {
+        let mut history = ClipboardHistory::new();
+        assert!(history.from_json(r#"["old copy", "newer"]"#));
+        assert_eq!(
+            history.entries().collect::<Vec<_>>(),
+            ["old copy", "newer"],
+            "legacy strings are kept, treated as freshly copied"
+        );
+    }
+
+    #[test]
+    fn object_entries_without_a_text_field_are_rejected() {
+        let mut history = history(&["keepme"]);
+        assert!(!history.from_json(r#"[{"timestamp": 1}]"#));
+        assert_eq!(history.entries().collect::<Vec<_>>(), ["keepme"]);
     }
 }

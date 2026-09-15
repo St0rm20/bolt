@@ -14,10 +14,11 @@
 //! work even when live capture is unavailable — persisted history is loaded at
 //! startup.
 
-use crate::clipboard::history::ClipboardHistory;
+use crate::clipboard::history::{ClipboardEntry, ClipboardHistory};
 use crate::{Plugin, PluginAction, PluginResult};
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Identifier used by the `enabled_plugins` config allow-list.
 pub const CLIPBOARD_PLUGIN_ID: &str = "clipboard";
@@ -84,19 +85,60 @@ impl Plugin for ClipboardPlugin {
         // itself is excluded from the filter; leading/trailing whitespace the
         // user typed after it is ignored (`clip: rust` searches `rust`).
         let filter = rest.trim();
-        let matches = self.lock_history().search(filter);
-        matches.iter().map(|entry| result_row(entry)).collect()
+        let now = clock_now();
+        let matches = self.lock_history().search_entries(filter);
+        matches.iter().map(|entry| result_row(entry, now)).collect()
     }
 }
 
 /// One history entry as a launcher row: a previewed title (full text in the
-/// copy action), a size hint as subtitle, and a copy action carrying the
-/// complete original content.
-fn result_row(entry: &str) -> PluginResult {
-    let title = preview(entry);
-    let subtitle = format!("{} characters", entry.chars().count());
+/// copy action), a size + age hint as subtitle, and a copy action carrying
+/// the complete original content.
+fn result_row(entry: &ClipboardEntry, now: u64) -> PluginResult {
+    let title = preview(&entry.text);
+    let subtitle = format!(
+        "{} characters · {}",
+        entry.text.chars().count(),
+        format_age(now, entry.timestamp)
+    );
     PluginResult::with_subtitle(title, subtitle)
-        .with_action(PluginAction::Copy { text: entry.to_owned() })
+        .with_action(PluginAction::Copy { text: entry.text.clone() })
+}
+
+/// The current wall-clock time in whole seconds since the Unix epoch, used to
+/// age the history entries shown by the plugin.
+fn clock_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+/// A short human age for an entry captured `timestamp` seconds ago, e.g.
+/// `just now`, `5m`, `3h`, `2d`, `6w` or `4mo`. Future timestamps (clock
+/// skew) read as `just now`.
+fn format_age(now: u64, timestamp: u64) -> String {
+    let age = now.saturating_sub(timestamp);
+    let minutes = age / 60;
+    if minutes < 1 {
+        return "just now".to_owned();
+    }
+    if minutes < 60 {
+        return format!("{minutes}m");
+    }
+    let hours = minutes / 60;
+    if hours < 24 {
+        return format!("{hours}h");
+    }
+    let days = hours / 24;
+    if days < 7 {
+        return format!("{days}d");
+    }
+    let weeks = days / 7;
+    if weeks < 5 {
+        return format!("{weeks}w");
+    }
+    format!("{}mo", days / 30)
 }
 
 /// A single-line preview of `text` for display, at most
@@ -238,10 +280,33 @@ mod tests {
     }
 
     #[test]
-    fn subtitle_reports_the_final_content_length() {
+    fn subtitle_reports_content_length_and_age() {
         let plugin = plugin_with(&["abc"]);
         let rows = plugin.query("clip:");
-        assert_eq!(rows[0].subtitle.as_deref(), Some("3 characters"));
+        let subtitle = rows[0].subtitle.as_deref().expect("a subtitle");
+        assert!(subtitle.starts_with("3 characters · "), "subtitle: {subtitle}");
+        assert!(
+            subtitle.ends_with("just now"),
+            "a fresh copy reports its age: {subtitle}"
+        );
+    }
+
+    #[test]
+    fn format_age_renders_human_durations() {
+        // A mid-century base timestamp leaves plenty of headroom for the
+        // multi-day subtractions below without overflowing.
+        let now = 4_000_000_000u64;
+        assert_eq!(format_age(now, now), "just now");
+        assert_eq!(format_age(now, now - 30), "just now");
+        assert_eq!(format_age(now, now - 5 * 60), "5m");
+        assert_eq!(format_age(now, now - 3 * 3_600), "3h");
+        assert_eq!(format_age(now, now - 2 * 86_400), "2d");
+        assert_eq!(format_age(now, now - 3 * 7 * 86_400), "3w");
+        // Weeks run 1-4; five weeks and up read as whole months.
+        assert_eq!(format_age(now, now - 35 * 86_400), "1mo");
+        assert_eq!(format_age(now, now - 65 * 86_400), "2mo");
+        assert_eq!(format_age(now + 60, now), "1m", "a minute ago reads as 1m");
+        assert_eq!(format_age(now, now + 60), "just now", "future timestamps count as fresh");
     }
 
     #[test]

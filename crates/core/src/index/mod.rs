@@ -131,11 +131,46 @@ impl std::error::Error for IndexerError {
 /// The conventional application directories: the user directory first, then
 /// `/usr/share/applications`.
 pub fn standard_directories() -> Vec<PathBuf> {
-    let mut directories = Vec::with_capacity(2);
+    let mut directories = Vec::with_capacity(4);
     if let Some(user) = user_applications_dir() {
         directories.push(user);
     }
+    // Flatpak apps export their .desktop files through the user/system export
+    // dirs; they come after the user dir and before the system apps dir.
+    directories.extend(flatpak_directories());
     directories.push(PathBuf::from("/usr/share/applications"));
+    directories
+}
+
+/// The Flatpak `.desktop` export directories that exist on this machine,
+/// user first: `$XDG_DATA_HOME/flatpak/exports/share/applications` (or
+/// `$HOME/.local/share/flatpak/exports/share/applications`) and then
+/// `/var/lib/flatpak/exports/share/applications`.
+///
+/// Only directories that actually exist are returned, so a machine without
+/// Flatpak simply yields an empty list instead of reporting spurious skips.
+#[must_use]
+pub fn flatpak_directories() -> Vec<PathBuf> {
+    let mut directories = Vec::with_capacity(2);
+    if let Some(data_home) = std::env::var_os("XDG_DATA_HOME") {
+        if !data_home.is_empty() {
+            let candidate = PathBuf::from(data_home).join("flatpak/exports/share/applications");
+            if candidate.is_dir() {
+                directories.push(candidate);
+            }
+            return directories;
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        let candidate = PathBuf::from(home).join(".local/share/flatpak/exports/share/applications");
+        if candidate.is_dir() {
+            directories.push(candidate);
+        }
+    }
+    let system = PathBuf::from("/var/lib/flatpak/exports/share/applications");
+    if system.is_dir() {
+        directories.push(system);
+    }
     directories
 }
 
@@ -523,6 +558,18 @@ mod tests {
             assert!(
                 directory.to_string_lossy().ends_with("applications"),
                 "user dir {directory:?} should end with 'applications'"
+            );
+        }
+    }
+
+    #[test]
+    fn flatpak_directories_are_standard_export_paths_only() {
+        // The Flatpak export dirs (when they exist) must look like flatpak
+        // export paths; nothing else is ever offered.
+        for directory in flatpak_directories() {
+            assert!(
+                directory.to_string_lossy().contains("flatpak/exports/share/applications"),
+                "unexpected flatpak dir: {directory:?}"
             );
         }
     }

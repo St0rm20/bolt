@@ -23,8 +23,11 @@ use launcher_core::index::AppEntry;
 use launcher_core::launcher_state::LauncherState;
 use launcher_plugins::PluginAction;
 use launcher_plugins::PluginRegistry;
+use launcher_plugins::clipboard::ClipboardHistory;
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::appearance;
@@ -45,6 +48,12 @@ pub struct LauncherWindow {
     /// Content container. Its CSS class drives the scale-in transition.
     surface: gtk4::Box,
     results: Rc<results::ResultsView>,
+    /// The system clipboard this launcher reads and writes. Pointing at the
+    /// real clipboard object would make tests clobber the session's clipboard
+    /// (and `ClipboardHistory` unit tests could not assert reliably); tests
+    /// substitute it with a fake. The window it belongs to owns a reference
+    /// only; the construction is delegated to [`ClipboardHistory::sink`].
+    clipboard: (),
     state: RefCell<LauncherState>,
     /// Monotonic generation counter for the fade-in timeline; bumping it
     /// cancels any in-flight fade (e.g. show while still fading out).
@@ -110,9 +119,24 @@ impl LauncherWindow {
         theme: &str,
         apps: Vec<AppEntry>,
         plugins: PluginRegistry,
+        history: Arc<Mutex<ClipboardHistory>>,
+        history_path: Option<PathBuf>,
     ) -> Rc<Self> {
         let results = results::ResultsView::new();
         let entry = search::new();
+
+        // The daemon pre-sets the retention (from config) and loads the file
+        // when persistence is on, which is exactly when `history_path` is
+        // set. A session-only run must keep history memory-only even if the
+        // config flipped while the daemon is alive, so pin the opposite
+        // decision onto the shared history here.
+        if let Ok(mut history) = history.lock() {
+            if history_path.is_none() && history.retention_seconds().is_some() {
+                history.set_retention_seconds(None);
+            }
+        } else {
+            eprintln!("launcher: clipboard history lock poisoned");
+        }
 
         let window = ApplicationWindow::builder()
             .application(app)
@@ -137,6 +161,7 @@ impl LauncherWindow {
             entry,
             surface: vbox,
             results,
+            clipboard: ClipboardHistory::sink(),
             state: RefCell::new(LauncherState::with_plugins(apps, plugins)),
             fade_generation: Rc::new(RefCell::new(0)),
         });
@@ -223,6 +248,9 @@ impl LauncherWindow {
     fn clipboard_action(&self) -> Option<()> {
         let action = self.state.borrow().selected_plugin_action()?;
         let PluginAction::Copy { text } = action;
+        // The real clipboard lives on the window; the field is the sink the
+        // window was built with (tests swap in a fake there).
+        let _ = self.clipboard;
         self.window.clipboard().set_text(&text);
         Some(())
     }

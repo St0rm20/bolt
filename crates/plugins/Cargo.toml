@@ -6,6 +6,7 @@ edition.workspace = true
 
 [dependencies]
 meval = { workspace = true }
+serde = { workspace = true }
 # System clipboard access for the clipboard-history monitor. Only the Wayland
 # backend is enabled (the project runs on Hyprland + Wayland): the default
 # `x11` feature would pull in Xlib for nothing. Reading requires the compositor

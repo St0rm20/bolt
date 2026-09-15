@@ -133,6 +133,28 @@ fn non_desktop_files_are_ignored() {
     );
 }
 
+/// A Flatpak desktop entry (`Exec` referencing `flatpak run`) is indexed
+/// normally with its `Exec` line kept verbatim, so it can be spawned
+/// unchanged.
+#[test]
+fn flatpak_desktop_entries_are_indexed_with_verbatim_exec() {
+    let report = AppIndexer::new(vec![fixture("flatpak")]).build_index();
+
+    let entry = report
+        .entries
+        .iter()
+        .find(|entry| entry.id == "com.microsoft.Edge")
+        .expect("flatpak desktop entry should be indexed");
+    assert_eq!(entry.name, "Microsoft Edge");
+    // The `flatpak run ...` line is kept verbatim (field codes and all); the
+    // launcher never rewrites it, it just spawns the command.
+    assert_eq!(
+        entry.exec,
+        "/usr/bin/flatpak run --branch=stable --file-forwarding com.microsoft.Edge @@u %U @@"
+    );
+    assert_eq!(entry.icon.as_deref(), Some("com.microsoft.Edge"));
+}
+
 /// The index is deterministic: rebuilding yields the same entries in the same
 /// (id-sorted) order.
 #[test]

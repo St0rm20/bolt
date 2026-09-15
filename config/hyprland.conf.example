@@ -18,10 +18,10 @@ decoration {
     }
 }
 
-windowrulev2 = float,      class:^(dev.launcher.gtk)$
-windowrulev2 = noborder,   class:^(dev.launcher.gtk)$
-windowrulev2 = blur,       class:^(dev.launcher.gtk)$
-windowrulev2 = center,     class:^(dev.launcher.gtk)$
+windowrulev2 = float,      class:^(io.github.bolt)$
+windowrulev2 = noborder,   class:^(io.github.bolt)$
+windowrulev2 = blur,       class:^(io.github.bolt)$
+windowrulev2 = center,     class:^(io.github.bolt)$
 
 # Open the launcher with the shortcut from config/config.toml.
 #

@@ -25,13 +25,16 @@ use launcher_core::config::Config;
 use launcher_core::index::AppEntry;
 use launcher_core::ipc::Command;
 use launcher_plugins::PluginRegistry;
+use launcher_plugins::clipboard::ClipboardHistory;
 use launcher_window::{LauncherControl, LauncherWindow};
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 
 /// Default GLib application identifier.
-pub const DEFAULT_APP_ID: &str = "dev.launcher.gtk";
+pub const DEFAULT_APP_ID: &str = "io.github.bolt";
 
 // GTK object handles are not `Send`, so they stay inside thread-local slots on
 // the GTK thread. `CommandHandle` is the only cross-thread bridge: its
@@ -114,10 +117,12 @@ fn app_slot() -> Option<Application> {
 /// Build and run the GTK launcher application, blocking until it quits.
 ///
 /// The daemon hands over the compiled application index (`apps`), the plugin
-/// registry to serve prefix queries with, the appearance configuration and a
-/// [`CommandHandle`] to drive the window. The index is consumed exactly once,
-/// when the window is first activated; commands arriving before that (the
-/// daemon gates on the `ready` receiver) are no-ops.
+/// registry to serve prefix queries with, the appearance configuration, a
+/// [`CommandHandle`] to drive the window and the shared clipboard history
+/// (`history`) plus, when history is persisted, the file it is stored in
+/// (`history_path`). The index is consumed exactly once, when the window is
+/// first activated; commands arriving before that (the daemon gates on the
+/// `ready` receiver) are no-ops.
 ///
 /// Returns the application's exit code.
 pub fn launch(
@@ -126,6 +131,8 @@ pub fn launch(
     apps: Vec<AppEntry>,
     plugins: PluginRegistry,
     handle: CommandHandle,
+    history: Arc<Mutex<ClipboardHistory>>,
+    history_path: Option<PathBuf>,
 ) -> glib::ExitCode {
     let appearance = config.appearance.clone();
     let theme = config.effective_theme().to_owned();
@@ -143,7 +150,15 @@ pub fn launch(
         else {
             return;
         };
-        let window = LauncherWindow::build(app, &appearance, &theme, apps, plugins);
+        let window = LauncherWindow::build(
+            app,
+            &appearance,
+            &theme,
+            apps,
+            plugins,
+            history.clone(),
+            history_path.clone(),
+        );
         let control = Rc::new(LauncherControl::new());
         control.attach(window);
         CONTROL_SLOT.with(|slot| *slot.borrow_mut() = Some(control));

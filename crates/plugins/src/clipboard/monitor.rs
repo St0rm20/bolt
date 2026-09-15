@@ -175,10 +175,15 @@ impl ClipboardMonitor {
     }
 
     /// Persist the current history. Save failures are logged (metadata only)
-    /// and never fatal — the in-memory history keeps working.
+    /// and never fatal — the in-memory history keeps working. A history
+    /// without retention (`session` mode) is deliberately not persisted.
     fn persist(&self) {
         let Some(path) = &self.persistence else { return };
-        if let Err(err) = self.lock_history().save(path) {
+        let history = self.lock_history();
+        if history.retention_seconds().is_none() {
+            return;
+        }
+        if let Err(err) = history.save(path) {
             eprintln!("launcher-clipboard: could not save history to {}: {err}", path.display());
         }
     }
@@ -311,20 +316,27 @@ mod tests {
         let path = dir.join("clipboard_history.json");
 
         let history = Arc::new(Mutex::new(ClipboardHistory::new()));
+        // A retention must be set for the monitor to persist anything; a
+        // plain (session-only) history stays in memory even with a path set.
+        history.lock().unwrap().set_retention_seconds(Some(86_400));
         let mut monitor =
             ClipboardMonitor::new(Box::new(ScriptedSource::ok("persisted text")), history.clone(), Some(path.clone()));
         monitor.poll().expect("poll");
         let entries: Vec<String> = history.lock().unwrap().entries().map(str::to_owned).collect();
-        let saved: Vec<String> = serde_json::from_str(&std::fs::read_to_string(&path).expect("file written"))
+        let saved: Vec<serde_json::Value> = serde_json::from_str(&std::fs::read_to_string(&path).expect("file written"))
             .expect("stored JSON parses");
-        assert_eq!(saved, entries, "the file holds exactly the persisted history");
+        let saved_texts: Vec<&str> = saved
+            .iter()
+            .filter_map(|entry| entry.get("text").and_then(|value| value.as_str()))
+            .collect();
+        assert_eq!(saved_texts, entries, "the file holds exactly the persisted history");
 
         // A steady clipboard must not rewrite the file: bump mtime, poll
         // again, assert the file content is unchanged (no second save).
         monitor.poll().expect("unchanged read adds nothing");
         assert_eq!(
             std::fs::read_to_string(&path).expect("file still present"),
-            serde_json::to_string(&entries).expect("json")
+            serde_json::to_string(&saved).expect("json")
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -334,6 +346,26 @@ mod tests {
         let (mut monitor, _history) = monitor_with(ScriptedSource::ok("memory only"));
         assert!(monitor.poll().expect("read succeeds"));
         // No path was given, so nothing to assert beyond a clean run.
+    }
+
+    #[test]
+    fn without_retention_a_path_never_persists() {
+        // A `session`-only history has no retention; even with a persistence
+        // path handed in, the monitor must keep it memory-only.
+        let dir = std::env::temp_dir().join(format!("bolt-clipboard-session-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("clipboard_history.json");
+
+        let history = Arc::new(Mutex::new(ClipboardHistory::new()));
+        let mut monitor = ClipboardMonitor::new(
+            Box::new(ScriptedSource::ok("session text")),
+            history.clone(),
+            Some(path.clone()),
+        );
+        assert!(monitor.poll().expect("read succeeds"));
+        assert!(!path.exists(), "no retention means no file is ever written");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

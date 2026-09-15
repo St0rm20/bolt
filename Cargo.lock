@@ -560,6 +560,7 @@ version = "0.1.0"
 dependencies = [
  "arboard",
  "meval",
+ "serde",
  "serde_json",
 ]
 

@@ -99,9 +99,20 @@ fn main() {
     let config = load_config();
 
     // Clipboard history is shared between the `clip:` plugin (searches it)
-    // and the monitor thread (fills it from the system clipboard).
+    // and the monitor thread (fills it from the system clipboard). The
+    // retention from the config bounds entry age and decides whether the
+    // history is persisted at all (`session` keeps it memory-only).
+    let retention_seconds = config
+        .appearance
+        .clipboard_persistence
+        .then(|| config.clipboard.retention.as_seconds())
+        .flatten();
     let clipboard_history = Arc::new(Mutex::new(ClipboardHistory::new()));
-    if config.appearance.clipboard_persistence {
+    clipboard_history
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .set_retention_seconds(retention_seconds);
+    if retention_seconds.is_some() {
         let path = default_history_path();
         let mut history = clipboard_history.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         match load_into(&mut history, &path) {
@@ -125,10 +136,13 @@ fn main() {
 
     let plugins = build_plugin_registry(&config, &clipboard_history);
 
-    let persistence = config.appearance.clipboard_persistence.then(default_history_path);
+    let persistence = retention_seconds.is_some().then(default_history_path);
     let clipboard_running = Arc::new(AtomicBool::new(true));
-    let clipboard_thread =
-        spawn_clipboard_monitor(clipboard_history, persistence, clipboard_running.clone());
+    let clipboard_thread = spawn_clipboard_monitor(
+        clipboard_history.clone(),
+        persistence.clone(),
+        clipboard_running.clone(),
+    );
 
     let socket_path = match socket::default_socket_path() {
         Ok(path) => path,
@@ -205,7 +219,15 @@ fn main() {
         runtime.spawn(serve::serve(listener, ready, handle.clone()));
         runtime.spawn(forward_signals(handle.clone()));
 
-        launcher_ui::launch(DEFAULT_APP_ID, &config, apps, plugins, handle);
+        launcher_ui::launch(
+            DEFAULT_APP_ID,
+            &config,
+            apps,
+            plugins,
+            handle,
+            clipboard_history,
+            persistence.clone(),
+        );
     });
 
     // The GTK loop has ended (Command::Quit): stop the clipboard monitor and

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Microsoft Edge
+GenericName=Web Browser
+Comment=Access the internet with Microsoft Edge for Linux
+Exec=/usr/bin/flatpak run --branch=stable --file-forwarding com.microsoft.Edge @@u %U @@
+Icon=com.microsoft.Edge
+Terminal=false
+Categories=Network;WebBrowser;
+Keywords=Edge;browser;web;
