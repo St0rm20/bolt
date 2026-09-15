@@ -1,0 +1,11 @@
+[package]
+name = "launcher-core"
+description = "Core logic and IPC protocol for the launcher"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+toml = { workspace = true }
+fuzzy-matcher = { workspace = true }
+launcher-plugins = { workspace = true }

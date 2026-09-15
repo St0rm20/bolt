@@ -1,0 +1,8 @@
+[package]
+name = "launcherctl"
+description = "CLI client for the launcher daemon"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+launcher-core = { workspace = true }

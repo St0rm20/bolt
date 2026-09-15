@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/ui",
+    "crates/plugins",
+    "crates/daemon",
+    "crates/launcherctl",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+# GTK 4 bindings. The version feature must match the system GTK4 major.minor
+# used by gtk4-devel (see README). Fedora 42 ships GTK 4.18.x -> v4_18.
+gtk4 = { version = "0.9", features = ["v4_18"] }
+# GIO/GLib bindings (sibling of gtk4-rs). Used only for the XDG portal
+# `color-scheme` query in the UI crate; otherwise everything is GTK4.
+gio = { version = "0.20" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "signal"] }
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+# JSON for the clipboard-history persistence file (`Vec<String>` round trip).
+serde_json = "1"
+# Sublime-Text-style fuzzy matching used by the core search/ranking module.
+fuzzy-matcher = "0.3"
+# Arithmetic expression parsing/evaluation used by the calculator plugin.
+# Evaluates as f64 (no integer division), supports `+ - * / ^ ()`, and rejects
+# non-math identifiers — which doubles as the plugin's activation check.
+meval = "0.2"
+launcher-core = { path = "crates/core" }
+launcher-ui = { path = "crates/ui" }
+launcher-plugins = { path = "crates/plugins" }

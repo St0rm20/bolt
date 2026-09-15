@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Valid App
+GenericName=Test Application
+Comment=A deterministic fixture used by the launcher indexer tests.
+Exec=/usr/bin/valid-app --flag %U
+Icon=applications-graphics
+Terminal=false
+Categories=Utility;Development;
+Keywords=test;fixture;

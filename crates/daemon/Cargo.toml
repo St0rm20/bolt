@@ -1,0 +1,11 @@
+[package]
+name = "launcher-daemon"
+description = "Resident daemon for the launcher: control socket + GTK UI"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+launcher-core = { workspace = true }
+launcher-ui = { workspace = true }
+launcher-plugins = { workspace = true }
+tokio = { workspace = true }

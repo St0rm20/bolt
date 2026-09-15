@@ -1,0 +1,4 @@
+[Desktop Entry]
+Type=Application
+Name=User Local App
+Exec=/usr/bin/local-valid-app %U

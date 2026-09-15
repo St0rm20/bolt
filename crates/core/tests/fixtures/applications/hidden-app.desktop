@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Hidden App
+Exec=/usr/bin/hidden-app
+Icon=applications-office
+NoDisplay=true

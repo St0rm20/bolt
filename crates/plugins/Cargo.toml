@@ -1,0 +1,15 @@
+[package]
+name = "launcher-plugins"
+description = "Plugin system abstractions for the launcher"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+meval = { workspace = true }
+# System clipboard access for the clipboard-history monitor. Only the Wayland
+# backend is enabled (the project runs on Hyprland + Wayland): the default
+# `x11` feature would pull in Xlib for nothing. Reading requires the compositor
+# to expose `zwlr_data_control_manager_v1` — Hyprland does; under the X11
+# protocol arboard reads via the X selection instead.
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
+serde_json = { workspace = true }

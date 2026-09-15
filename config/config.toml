@@ -1,0 +1,24 @@
+shortcut = "SUPER+SPACE"
+theme = "dark"
+
+# Allow-list of plugin ids. Registered plugins that are not listed here are
+# skipped at startup; an empty list keeps every registered plugin active.
+# "applications" is the native app search, "echo" is the example plugin,
+# "calculator" evaluates arithmetic expressions inline, and "clipboard"
+# keeps a searchable history of copied text (`clip:`).
+enabled_plugins = [
+    "applications",
+    "echo",
+    "calculator",
+    "clipboard",
+]
+
+[appearance]
+theme = "auto"
+accent_color = "#0a84ff"
+blur_enabled = true
+corner_radius = 16
+window_width = 640
+# Whether copied text is remembered between sessions (`clip:` searches the
+# history of previous copies too). Disable to keep the clipboard private.
+clipboard_persistence = true

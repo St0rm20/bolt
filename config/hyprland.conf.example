@@ -1,0 +1,31 @@
+# Hyprland rules for the launcher (add these to ~/.config/hypr/hyprland.conf).
+#
+# `class:^(dev.launcher.gtk)$` matches the GTK application id used by the
+# daemon (crates/ui DEFAULT_APP_ID) — Hyprland derives the Wayland app id
+# from it, so the same pattern will also work as `class:` in windowrulev2.
+
+# Frosted glass: let the compositor blur whatever sits behind the translucent
+# window. The launcher only paints a semi-transparent background; if the blur
+# feels weak, raise `size`/`passes`.
+decoration {
+    blur {
+        enabled = true
+        size = 6
+        passes = 3
+    }
+    shadow {
+        enabled = true
+    }
+}
+
+windowrulev2 = float,      class:^(dev.launcher.gtk)$
+windowrulev2 = noborder,   class:^(dev.launcher.gtk)$
+windowrulev2 = blur,       class:^(dev.launcher.gtk)$
+windowrulev2 = center,     class:^(dev.launcher.gtk)$
+
+# Open the launcher with the shortcut from config/config.toml.
+#
+# `launcherctl` must be on your PATH (or use an absolute path to the binary,
+# e.g. /home/you/.cargo/bin/launcherctl). The daemon must already be running:
+#   target/debug/launcher-daemon &
+bind = SUPER, SPACE, exec, launcherctl toggle
