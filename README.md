@@ -173,7 +173,9 @@ accent_color = "#0a84ff"
 blur_enabled = true
 corner_radius = 16
 window_width = 640
-clipboard_persistence = true
+
+[clipboard]
+retention = "1_week"
 ```
 
 | Key | Type | Meaning |
@@ -191,7 +193,16 @@ clipboard_persistence = true
 | `blur_enabled` | bool | `true` | Keep the background translucent (the compositor applies blur). When `false` the background is opaque. |
 | `corner_radius` | integer | `16` | Window corner radius in pixels. |
 | `window_width` | integer | `640` | Window width in pixels. |
-| `clipboard_persistence` | bool | `true` | Remember copied text between sessions. Disable for a memory-only history. |
+
+### `[clipboard]`
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `retention` | string | `1_week` | How long copied entries are kept. `session` disables persistence entirely (memory-only history); `1_day`, `1_week`, `1_month` persist the history and bound entry age. |
+
+Older config files that still set `[appearance] clipboard_persistence` are
+migrated on load: `true` → `retention = "1_week"`, `false` →
+`retention = "session"`.
 
 Parsing is implemented in `crates/core/src/config.rs` with `serde` + `toml`
 and is deliberately kept out of the GTK UI crate.
@@ -253,7 +264,7 @@ The daemon registers the built-ins and filters them by `enabled_plugins`
   sql` to filter it; Enter copies the chosen entry back to the clipboard. When
   compositor clipboard capture is unavailable the monitor logs a warning and
   stops — the launcher keeps working. Persistence is off for single-session
-  use with `[appearance] clipboard_persistence = false`.
+  use with `[clipboard] retention = "session"`.
 
 ```txt
 launcher-daemon: plugins: echo, calculator, clipboard

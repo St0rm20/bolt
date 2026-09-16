@@ -19,6 +19,9 @@ accent_color = "#0a84ff"
 blur_enabled = true
 corner_radius = 16
 window_width = 640
-# Whether copied text is remembered between sessions (`clip:` searches the
-# history of previous copies too). Disable to keep the clipboard private.
-clipboard_persistence = true
+
+[clipboard]
+# How long copied text is remembered for `clip:` searching. "session" keeps
+# the history memory-only (cleared when the daemon stops); "1_day", "1_week"
+# or "1_month" persist it to disk and prune entries older than that.
+retention = "1_week"

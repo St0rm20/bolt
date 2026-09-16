@@ -1,12 +1,26 @@
 //! `calculator` — evaluates arithmetic expressions typed into the search box.
 //!
-//! The calculator activates *without a prefix*: [`CalculatorPlugin::matches`]
-//! delegates to the expression evaluator, so the plugin lights up exactly
-//! while the query is a valid expression (`2 + 2`) and stays silent for
-//! ordinary searches (`firefox`). When active its single result — the
-//! formatted value — is shown above any application matches. Activating the
-//! row (Enter) copies the value to the clipboard via a
-//! [`PluginAction::Copy`].
+//! The calculator activates *without a prefix*. Two situations light it up:
+//!
+//! * the query is a valid, finite expression (`2 + 2`, `2³`, `4//2`) — the
+//!   plugin produces its single result — the formatted value — above any
+//!   application matches, and Enter copies it to the clipboard via a
+//!   [`PluginAction::Copy`]; or
+//! * the query *looks like* an arithmetic expression still being typed
+//!   (`6/`, `2 +`, `(5 * 3`) — the plugin then matches but yields no rows, so
+//!   the launcher shows a single greyed-out "No results" hint instead of
+//!   humming with an ordinary app search (`2 +` fuzzy-matches nothing useful).
+//!
+//! Ordinary searches (`firefox`) stay silent: letters are not arithmetic.
+//!
+//! ## The `//` root binder is a project convention
+//!
+//! `a//b` is **not** standard mathematical notation. This implementation
+//! interprets it as *"the b-th root of a"*; `4//2` therefore means the square
+//! root of 4, i.e. `2`. The parsing rule alone decides this (`//` is rewritten
+//! to `a^(1/b)` in [`rewrite_root_operators`]), so changing the convention
+//! later only touches that rewriter. The renaming of the binder is also
+//! trivial if cross-platform users expect a different syntax.
 //!
 //! Expressions are parsed and evaluated with the `meval` crate (no shell, no
 //! dynamic execution). A bare context — no constants, no function calls —
@@ -37,14 +51,41 @@ impl Plugin for CalculatorPlugin {
         "Calculator"
     }
 
-    /// No prefix: activation follows expression validity.
+    /// No prefix: activation follows expression form. A valid finite
+    /// expression activates the calculator; so does an *in-progress* expression
+    /// that is not yet evaluable (`6/`), which lets the launcher show a hint
+    /// rather than running an irrelevant app search. Ordinary words never
+    /// activate it.
     fn matches(&self, query: &str) -> bool {
-        finite_value(query).is_some()
+        finite_value(query).is_some() || looks_like_arithmetic(query)
     }
 
     fn query(&self, query: &str) -> Vec<PluginResult> {
         result_for(query).into_iter().collect()
     }
+}
+
+/// Whether `text` is plausibly an arithmetic expression still being typed:
+/// only digits, the superscript digits/`⁻`, the operators `+ - * / ^`, the
+/// `//` root binder and parentheses, with at least one digit present. A query
+/// like `6/` or `2 +` passes; `firefox` or `echo: hi` do not.
+///
+/// This is deliberately a *character-class* check, not a partial parse — the
+/// only goal is to keep malformed/incomplete expressions routed to the
+/// calculator (which shows a hint) instead of the application index.
+fn looks_like_arithmetic(text: &str) -> bool {
+    let mut saw_digit = false;
+    for ch in text.chars() {
+        match ch {
+            c if c.is_ascii_digit() => saw_digit = true,
+            // Superscript digits are real material for a power expression.
+            '⁰' | '¹' | '²' | '³' | '⁴' | '⁵' | '⁶' | '⁷' | '⁸' | '⁹' => saw_digit = true,
+            c if c.is_whitespace() => {}
+            '.' | '+' | '-' | '*' | '/' | '^' | '(' | ')' | '⁻' => {}
+            _ => return false,
+        }
+    }
+    saw_digit
 }
 
 /// Build the result for `query` when it is a valid, finite expression: the
@@ -472,8 +513,27 @@ mod tests {
     }
 
     #[test]
-    fn invalid_expressions_do_not_activate() {
-        for query in ["2 +", "(5 * 3", "abc + 5", "2 ** 3", "echo: hi", ""] {
+    fn complete_expressions_activate_with_a_result() {
+        for query in ["2 + 2", "(2 + 3) * 4", "6/2", "2^8", "10 / 4"] {
+            assert!(CalculatorPlugin.matches(query), "{query:?} must match");
+            assert_eq!(CalculatorPlugin.query(query).len(), 1, "{query:?} yields one row");
+        }
+    }
+
+    #[test]
+    fn incomplete_expressions_activate_without_rows() {
+        // An in-progress expression (`6/`, `2 +`, an unclosed parenthesis) is
+        // routed to the calculator so the launcher can show a single hint —
+        // the plugin *matches* yet produces no result row.
+        for query in ["6/", "2 +", "(5 * 3", "2 ** 3", "16//"] {
+            assert!(CalculatorPlugin.matches(query), "{query:?} must match as arithmetic in progress");
+            assert!(CalculatorPlugin.query(query).is_empty(), "{query:?} must yield no rows yet");
+        }
+    }
+
+    #[test]
+    fn non_arithmetic_queries_never_activate() {
+        for query in ["echo: hi", "abc + 5", "firefox", "visual studio code", "pi", "sqrt(16)", ""] {
             assert!(!CalculatorPlugin.matches(query), "{query:?} must not match");
             assert!(CalculatorPlugin.query(query).is_empty(), "{query:?} must yield no results");
         }
@@ -483,6 +543,7 @@ mod tests {
     fn normal_search_queries_do_not_activate() {
         for query in ["firefox", "visual studio code", "terminal", "file manager"] {
             assert!(!CalculatorPlugin.matches(query), "{query:?} must not match");
+            assert!(CalculatorPlugin.query(query).is_empty(), "{query:?} must yield no rows");
         }
     }
 
@@ -530,10 +591,12 @@ mod tests {
     }
 
     #[test]
-    fn division_by_zero_yields_no_result() {
+    fn division_by_zero_yields_a_hint_but_no_result() {
         // meval evaluates `1 / 0` to `inf`; non-finite values are not useful
-        // answers, so the calculator stays quiet and apps keep searching.
-        assert!(!CalculatorPlugin.matches("1 / 0"));
+        // answers, so the calculator produces no row. The query is still
+        // arithmetic-looking, so it activates for a single "No results" hint
+        // rather than sending Apps on a futile fuzzy search.
+        assert!(CalculatorPlugin.matches("1 / 0"));
         assert!(CalculatorPlugin.query("1 / 0").is_empty());
     }
 
@@ -552,14 +615,15 @@ mod tests {
     }
 
     #[test]
-    fn matches_is_consistent_with_query_results() {
-        for query in ["2^8", "(2 + 3) * 4", "2 +", "firefox", "10 / 4"] {
-            assert_eq!(
-                CalculatorPlugin.matches(query),
-                !CalculatorPlugin.query(query).is_empty(),
-                "matches and query must agree on {query:?}"
-            );
-        }
+    fn matches_covers_both_results_and_in_progress_hints() {
+        // A valid expression matches and yields a row; an in-progress
+        // expression matches but yields none (the launcher turns that into a
+        // hint); a non-arithmetic query stays silent entirely.
+        assert!(CalculatorPlugin.matches("6/2"));
+        assert_eq!(CalculatorPlugin.query("6/2").len(), 1);
+        assert!(CalculatorPlugin.matches("6/"));
+        assert!(CalculatorPlugin.query("6/").is_empty());
+        assert!(!CalculatorPlugin.matches("firefox"));
     }
 
     #[test]
@@ -597,11 +661,17 @@ mod tests {
     }
 
     #[test]
-    fn degenerate_root_inputs_stay_inactive() {
+    fn degenerate_root_inputs_stay_inactive_or_hint_only() {
         // A root with a letter operand is not arithmetic; `//` alone has no
-        // operands; a bare `//` followed by nothing cannot parse.
-        for query in ["16//square", "//", "2^^//", "8//"] {
+        // digits, so neither activates.
+        for query in ["16//square", "//"] {
             assert!(!CalculatorPlugin.matches(query), "{query:?} must not activate");
+        }
+        // `2^^//` and `8//` are arithmetic-looking but unparseable: they
+        // match (as a hint) yet yield no rows.
+        for query in ["2^^//", "8//"] {
+            assert!(CalculatorPlugin.matches(query), "{query:?} must match as in-progress input");
+            assert!(CalculatorPlugin.query(query).is_empty(), "{query:?} must yield no rows");
         }
     }
 }

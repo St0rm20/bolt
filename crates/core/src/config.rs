@@ -47,11 +47,6 @@ pub struct Appearance {
     pub corner_radius: u32,
     /// Default width of the launcher window in pixels.
     pub window_width: u32,
-    /// Whether the clipboard history persists between sessions. When enabled
-    /// (the default), copied text is saved to
-    /// `$XDG_DATA_HOME/launcher/clipboard_history.json` so `clip:` shows past
-    /// copies after a restart.
-    pub clipboard_persistence: bool,
 }
 
 impl Default for Appearance {
@@ -62,7 +57,6 @@ impl Default for Appearance {
             blur_enabled: true,
             corner_radius: 16,
             window_width: 640,
-            clipboard_persistence: true,
         }
     }
 }
@@ -178,9 +172,13 @@ impl Default for Config {
 
 impl Config {
     /// Load configuration from a TOML file on disk.
+    ///
+    /// Container for the `[appearance] clipboard_persistence` → `[clipboard]
+    /// retention` migration (see the body for the mapping used).
     pub fn load(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
         let contents = std::fs::read_to_string(path.as_ref())?;
-        let config: Config = toml::from_str(&contents)?;
+        let mut config: Config = toml::from_str(&contents)?;
+        migrate_legacy_clipboard(&contents, &mut config);
         Ok(config)
     }
 
@@ -250,6 +248,50 @@ fn non_table_error() -> ConfigError {
         std::io::ErrorKind::InvalidData,
         "config root and sections must be tables",
     ))
+}
+
+/// Migration note — `[appearance] clipboard_persistence` → `[clipboard]
+/// retention`.
+///
+/// Phase 7.1 replaced the plain boolean `appearance.clipboard_persistence`
+/// with the granular `[clipboard] retention` field (see [`ClipboardRetention`]).
+/// An old config file that still carries the boolean is migrated here, so an
+/// upgrade runs unmodified:
+///
+/// * `clipboard_persistence = false` → `retention = "session"` (the old
+///   meaning: a memory-only history, cleared when the daemon stops, nothing
+///   written to disk);
+/// * `clipboard_persistence = true` → `retention = "1_week"` (the old meaning
+///   was "persist forever", which the boolean could not do per-entry; one week
+///   is the nearest bounded equivalent — it keeps the history across restarts
+///   without growing without bound).
+///
+/// An explicit `[clipboard] retention` (written by the settings panel) always
+/// wins over the migration, and a config with neither field keeps the
+/// [`ClipboardConfig::default`] of one week.
+fn migrate_legacy_clipboard(contents: &str, config: &mut Config) {
+    let Ok(value) = toml::from_str::<toml::Value>(contents) else {
+        return;
+    };
+    let Some(legacy) = value
+        .get("appearance")
+        .and_then(|section| section.as_table())
+        .and_then(|table| table.get("clipboard_persistence"))
+        .and_then(toml::Value::as_bool)
+    else {
+        return;
+    };
+    let retention_explicit = value
+        .get("clipboard")
+        .and_then(|section| section.as_table())
+        .is_some_and(|table| table.contains_key("retention"));
+    if !retention_explicit {
+        config.clipboard.retention = if legacy {
+            ClipboardRetention::OneWeek
+        } else {
+            ClipboardRetention::Session
+        };
+    }
 }
 
 /// Errors that can occur while loading the configuration.
@@ -328,7 +370,6 @@ accent_color = "#ff6600"
 blur_enabled = false
 corner_radius = 24
 window_width = 800
-clipboard_persistence = false
 "##;
         let config: Config = toml::from_str(input).expect("valid TOML should parse");
         assert_eq!(config.appearance.theme, "auto");
@@ -336,7 +377,6 @@ clipboard_persistence = false
         assert!(!config.appearance.blur_enabled);
         assert_eq!(config.appearance.corner_radius, 24);
         assert_eq!(config.appearance.window_width, 800);
-        assert!(!config.appearance.clipboard_persistence);
     }
 
     #[test]
@@ -353,8 +393,67 @@ accent_color = "#123456"
         assert_eq!(config.appearance.blur_enabled, true);
         assert_eq!(config.appearance.corner_radius, 16);
         assert_eq!(config.appearance.window_width, 640);
-        assert!(config.appearance.clipboard_persistence, "persistence on by default");
         assert_eq!(config.appearance.theme, "");
+    }
+
+    #[test]
+    fn legacy_clipboard_persistence_false_migrates_to_session() {
+        let path = temp_dir("legacy-session").join("config.toml");
+        std::fs::write(
+            &path,
+            "shortcut = \"SUPER+SPACE\"\ntheme = \"dark\"\n[appearance]\nclipboard_persistence = false\n",
+        )
+        .expect("write");
+        let config = Config::load(&path).expect("load ok");
+        assert_eq!(
+            config.clipboard.retention,
+            ClipboardRetention::Session,
+            "false had the exact meaning of a memory-only session"
+        );
+    }
+
+    #[test]
+    fn legacy_clipboard_persistence_true_migrates_to_one_week() {
+        let path = temp_dir("legacy-week").join("config.toml");
+        std::fs::write(
+            &path,
+            "shortcut = \"SUPER+SPACE\"\ntheme = \"dark\"\n[appearance]\nclipboard_persistence = true\n",
+        )
+        .expect("write");
+        let config = Config::load(&path).expect("load ok");
+        assert_eq!(
+            config.clipboard.retention,
+            ClipboardRetention::OneWeek,
+            "true meant infra-persistence; a bounded week is the nearest equivalent"
+        );
+    }
+
+    #[test]
+    fn explicit_clipboard_retention_wins_over_legacy_flags() {
+        let path = temp_dir("legacy-explicit").join("config.toml");
+        std::fs::write(
+            &path,
+            "shortcut = \"SUPER+SPACE\"\ntheme = \"dark\"\n[appearance]\nclipboard_persistence = false\n[clipboard]\nretention = \"1_month\"\n",
+        )
+        .expect("write");
+        let config = Config::load(&path).expect("load ok");
+        assert_eq!(
+            config.clipboard.retention,
+            ClipboardRetention::OneMonth,
+            "an explicit [clipboard] retention always wins"
+        );
+    }
+
+    #[test]
+    fn config_without_clipboard_flags_defaults_to_one_week() {
+        let path = temp_dir("legacy-none").join("config.toml");
+        std::fs::write(
+            &path,
+            "shortcut = \"SUPER+SPACE\"\ntheme = \"dark\"\n",
+        )
+        .expect("write");
+        let config = Config::load(&path).expect("load ok");
+        assert_eq!(config.clipboard, ClipboardConfig::default());
     }
 
     #[test]

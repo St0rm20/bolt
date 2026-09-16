@@ -213,7 +213,7 @@ window.launcher viewport {{
     background-color: {elevated};
     border: 1px solid {elevated_border};
     color: {fg};
-    caret-color: {accent};
+    caret-color: {fg};
     outline: none;
     box-shadow: none;
 }}
@@ -269,6 +269,17 @@ window.launcher viewport {{
     color: {fg};
 }}
 
+.launcher-app-label {{
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: {secondary};
+    padding: 1px 6px;
+    border-radius: 999px;
+    border: 1px solid {edge};
+    background-color: transparent;
+}}
+
 .launcher-result-subtitle {{
     font-size: 12px;
     color: {secondary};
@@ -299,7 +310,6 @@ window.launcher viewport {{
         background = background,
         fg = palette.foreground,
         secondary = palette.secondary,
-        accent = accent,
         selection = selection,
         focus_border = focus_border,
         focus_ring = focus_ring,
@@ -389,7 +399,7 @@ mod tests {
         let css = build_css(&DARK, &appearance);
         assert!(css.contains("background-color: rgba(28, 28, 30, 0.72)"));
         assert!(css.contains("border-radius: 16px"));
-        assert!(css.contains("#0a84ff"));
+        assert!(css.contains("caret-color: #f5f5f7"));
     }
 
     #[test]

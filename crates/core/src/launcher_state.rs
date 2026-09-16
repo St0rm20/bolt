@@ -187,6 +187,14 @@ impl LauncherState {
         self.selection = move_position(self.selection, self.results.len(), delta);
     }
 
+    /// Directly set the highlighted row. Used by mouse clicks so the pointer's
+    /// selection and the keyboard's `selected_index` are one and the same
+    /// [`Self::selection`] — there is no separate pointer-selection state.
+    /// Positions beyond the current result list clamp to `None`.
+    pub fn set_selection(&mut self, position: impl Into<Option<usize>>) {
+        self.selection = position.into().filter(|position| *position < self.results.len());
+    }
+
     /// Recompute the ranked result list for the current query.
     ///
     /// The empty query short-circuits to the index's natural order without
@@ -231,6 +239,19 @@ impl LauncherState {
                 .map(|matched| ListRow::App(matched.index))
                 .collect()
         };
+        // Guarantee the "at most one Hint row" invariant: only a matching
+        // plugin can produce a hint today, and `dispatch` yields a single
+        // plugin, so this filters defensively (a future plugin API could not
+        // regress the UI into stacked hint rows).
+        let mut saw_hint = false;
+        self.results.retain(|row| match row {
+            ListRow::Hint(_) if saw_hint => false,
+            ListRow::Hint(_) => {
+                saw_hint = true;
+                true
+            }
+            _ => true,
+        });
         self.selection = if self.results.is_empty() { None } else { Some(0) };
     }
 }
@@ -596,6 +617,82 @@ mod tests {
         );
         state.set_query("firefox");
         assert_eq!(state.selected_plugin_action(), None, "app rows have no plugin action");
+    }
+
+    /// State over [`fixture`] with only the built-in calculator registered.
+    fn calculator_state() -> LauncherState {
+        let mut registry = PluginRegistry::new();
+        registry.register(Box::new(launcher_plugins::calculator::CalculatorPlugin));
+        LauncherState::with_plugins(fixture(), registry)
+    }
+
+    /// The number of hint rows currently shown.
+    fn hint_count(state: &LauncherState) -> usize {
+        state.results().iter().filter(|row| row.as_hint().is_some()).count()
+    }
+
+    #[test]
+    fn incomplete_expression_shows_exactly_one_hint_which_is_replaced() {
+        // Regression: hint rows must never stack. `6/` is arithmetic-looking
+        // but not yet evaluable, so the calculator matches and yields a single
+        // hint — and nothing else.
+        let mut state = calculator_state();
+        state.set_query("6/");
+        assert_eq!(state.results().len(), 1, "a single hint, not a stack");
+        assert_eq!(hint_count(&state), 1);
+        assert_eq!(state.selection(), Some(0));
+
+        // Completing the expression replaces the hint with the result row.
+        state.set_query("6/2");
+        assert_eq!(hint_count(&state), 0, "the hint disappears the instant the query completes");
+        assert!(matches!(state.results().first(), Some(ListRow::Plugin { .. })));
+        let (_, result) = state.results()[0].as_plugin().expect("a plugin row");
+        assert_eq!(result.title, "3", "6/2 is ordinary division");
+
+        // Clearing the field resets to the full, unfiltered app list.
+        state.clear();
+        assert_eq!(app_indexes(&state), [0, 1, 2, 3]);
+        assert_eq!(hint_count(&state), 0, "no leftover hint after clearing");
+    }
+
+    #[test]
+    fn hint_disappears_when_the_query_stops_matching() {
+        let mut state = calculator_state();
+        state.set_query("6/");
+        assert_eq!(hint_count(&state), 1);
+        // A wordy query stops the calculator (and matches an app instead).
+        state.set_query("fire");
+        assert_eq!(hint_count(&state), 0);
+        assert_eq!(app_indexes(&state), [0, 3]);
+        // An empty query resets too.
+        state.set_query("6/");
+        state.clear();
+        assert_eq!(hint_count(&state), 0);
+    }
+
+    #[test]
+    fn hint_rows_are_never_actionable() {
+        let mut state = calculator_state();
+        state.set_query("6/");
+        assert!(state.selected_plugin_action().is_none(), "a hint has no activation action");
+        assert!(state.selected_app().is_none(), "a hint is never an application");
+        assert!(state.selected_plugin().is_none(), "a hint has no plugin behind it");
+    }
+
+    #[test]
+    fn set_selection_replaces_the_keyboard_selection() {
+        let mut state = LauncherState::new(fixture());
+        state.set_query("fire");
+        assert_eq!(state.selection(), Some(0));
+        // Mouse click on the second "fire" match: shares the same selected_index.
+        state.set_selection(Some(1));
+        assert_eq!(state.selection(), Some(1));
+        assert_eq!(state.selected_app().map(|a| a.name.as_str()), Some("Firefox Developer Edition"));
+        // Arrow keys continue from where the mouse left off.
+        state.move_selection(1);
+        assert_eq!(state.selection(), Some(0), "wraps from the mouse position");
+        state.set_selection(Some(99));
+        assert_eq!(state.selection(), None, "out-of-range selections clamp to none");
     }
 
     #[test]

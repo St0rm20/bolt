@@ -102,11 +102,7 @@ fn main() {
     // and the monitor thread (fills it from the system clipboard). The
     // retention from the config bounds entry age and decides whether the
     // history is persisted at all (`session` keeps it memory-only).
-    let retention_seconds = config
-        .appearance
-        .clipboard_persistence
-        .then(|| config.clipboard.retention.as_seconds())
-        .flatten();
+    let retention_seconds = config.clipboard.retention.as_seconds();
     let clipboard_history = Arc::new(Mutex::new(ClipboardHistory::new()));
     clipboard_history
         .lock()

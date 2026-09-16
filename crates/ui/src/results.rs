@@ -41,7 +41,7 @@ impl ResultsView {
     pub fn new() -> Rc<Self> {
         let list = gtk4::ListBox::new();
         list.set_selection_mode(gtk4::SelectionMode::Single);
-        list.set_activate_on_single_click(false);
+        list.set_activate_on_single_click(true);
         list.add_css_class("launcher-results");
 
         let scrolled = gtk4::ScrolledWindow::new();
@@ -60,6 +60,17 @@ impl ResultsView {
     /// The widget to embed in the window.
     pub fn widget(&self) -> &gtk4::ScrolledWindow {
         &self.scrolled
+    }
+
+    /// The list box backing the visible rows.
+    pub fn list(&self) -> &gtk4::ListBox {
+        &self.list
+    }
+
+    /// The visible row index for a particular ListBoxRow, if the row is still
+    /// mounted.
+    pub fn row_index(&self, row: &gtk4::ListBoxRow) -> Option<usize> {
+        self.rows.borrow().iter().position(|candidate| candidate == row)
     }
 
     /// Re-render the list from the current state. Called only when the query
@@ -127,9 +138,15 @@ fn make_row(app: &AppEntry) -> gtk4::ListBoxRow {
     name.set_xalign(0.0);
     name.set_hexpand(true);
 
+    let tag = gtk4::Label::new(Some("app"));
+    tag.add_css_class("launcher-app-label");
+    tag.set_xalign(1.0);
+    tag.set_valign(gtk4::Align::Center);
+
     let hbox = gtk4::Box::new(gtk4::Orientation::Horizontal, 14);
     hbox.append(&icon);
     hbox.append(&name);
+    hbox.append(&tag);
 
     row.set_child(Some(&hbox));
     row

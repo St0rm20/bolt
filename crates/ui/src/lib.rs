@@ -34,7 +34,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
 /// Default GLib application identifier.
-pub const DEFAULT_APP_ID: &str = "io.github.bolt";
+pub const DEFAULT_APP_ID: &str = "dev.bolt.gtk";
 
 // GTK object handles are not `Send`, so they stay inside thread-local slots on
 // the GTK thread. `CommandHandle` is the only cross-thread bridge: its

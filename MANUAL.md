@@ -149,7 +149,6 @@ accent_color = "#0a84ff"
 blur_enabled = true
 corner_radius = 16
 window_width = 640
-clipboard_persistence = true
 
 [clipboard]
 retention = "1_week"
@@ -172,7 +171,9 @@ retention = "1_week"
 | `blur_enabled` | bool | `true` | Translucent background, blurred by the compositor. `false` = opaque. |
 | `corner_radius` | integer | `16` | Window corner radius in pixels. |
 | `window_width` | integer | `640` | Window width in pixels. |
-| `clipboard_persistence` | bool | `true` | Whether copied text is remembered between sessions. `false` keeps the history memory-only. |
+
+Older config files that still set `clipboard_persistence` in this section
+are migrated to the equivalent `[clipboard] retention` value on load.
 
 ### `[clipboard]`
 
@@ -262,7 +263,7 @@ How it works:
   `$XDG_DATA_HOME/launcher/clipboard_history.json` (fallback
   `~/.local/share/launcher/`). Persisted entries carry a capture timestamp,
   and stale entries are pruned by age on access.
-- `session` retention (or `clipboard_persistence = false`) keeps the history
+- `session` retention keeps the history
   **in memory only** — nothing is ever written to disk, protecting your
   clipboard privacy across restarts.
 - If capture is unavailable (no Wayland data-control backend), the daemon
@@ -325,6 +326,6 @@ windowrulev2 = center,     class:^(io.github.bolt)$
 | `launcherctl: is the daemon running?` | Start the daemon first (`cargo run -p launcher-daemon`, from the workspace root). |
 | `another instance is running on ...` | A live daemon already owns the socket; use `launcherctl toggle` instead. |
 | Startup complains about the clipboard backend | The compositor lacks `wlr-data-control`; live capture is off but `clip:` still searches persisted history. |
-| History does not survive a restart | `retention = "session"` or `clipboard_persistence = false` are set — add a retention to enable persistence. |
+| History does not survive a restart | `retention = "session"` is set — switch to `1_day`/`1_week`/`1_month` to enable persistence. |
 | Confusing GTK backend behaviour on Hyprland | Prefix the daemon with `GDK_BACKEND=wayland`. |
 | Window not floating/centred | Add the `windowrulev2` lines from [Hyprland integration](#hyprland-integration). |
