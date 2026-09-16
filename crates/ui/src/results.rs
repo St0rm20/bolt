@@ -14,7 +14,7 @@
 
 use gtk4::prelude::*;
 use launcher_core::index::AppEntry;
-use launcher_core::launcher_state::{LauncherState, ListRow};
+use launcher_core::launcher_state::{BoltCommand, LauncherState, ListRow};
 use launcher_plugins::PluginResult;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -95,6 +95,7 @@ impl ResultsView {
             let widget = match row {
                 ListRow::App(position) => apps.get(*position).map(make_row),
                 ListRow::Plugin { result, .. } => Some(make_plugin_row(result)),
+                ListRow::Command(command) => Some(make_command_row(*command)),
                 ListRow::Hint(text) => Some(hint_row(text)),
             };
             if let Some(widget) = widget {
@@ -122,6 +123,22 @@ impl ResultsView {
             }
         }
     }
+}
+
+fn make_command_row(command: BoltCommand) -> gtk4::ListBoxRow {
+    let row = gtk4::ListBoxRow::new();
+    row.add_css_class("launcher-results-row");
+    let title = gtk4::Label::new(Some(command.title()));
+    title.add_css_class("launcher-app-name");
+    title.set_xalign(0.0);
+    title.set_hexpand(true);
+    let tag = gtk4::Label::new(Some("bolt"));
+    tag.add_css_class("launcher-app-label");
+    let box_ = gtk4::Box::new(gtk4::Orientation::Horizontal, 14);
+    box_.append(&title);
+    box_.append(&tag);
+    row.set_child(Some(&box_));
+    row
 }
 
 /// A single selectable result row: icon on the left, application name on the

@@ -133,9 +133,12 @@ pub fn launch(
     handle: CommandHandle,
     history: Arc<Mutex<ClipboardHistory>>,
     history_path: Option<PathBuf>,
+    config_path: PathBuf,
 ) -> glib::ExitCode {
     let appearance = config.appearance.clone();
-    let theme = config.effective_theme().to_owned();
+    // Theme switching is intentionally disabled until the live theme path is
+    // fixed; Bolt stays on the dark palette for this phase.
+    let theme = "dark".to_owned();
     let apps_cell = Rc::new(RefCell::new(Some(apps)));
     let plugins_cell = Rc::new(RefCell::new(Some(plugins)));
 
@@ -158,6 +161,7 @@ pub fn launch(
             plugins,
             history.clone(),
             history_path.clone(),
+            config_path.clone(),
         );
         let control = Rc::new(LauncherControl::new());
         control.attach(window);

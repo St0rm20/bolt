@@ -30,6 +30,8 @@ pub enum ListRow {
         plugin: usize,
         result: PluginResult,
     },
+    /// A built-in Bolt command shown by ordinary trigger words.
+    Command(BoltCommand),
     /// A non-activatable hint (a plugin that matched but produced no rows).
     /// Rendered grey in the UI; never usable with Enter.
     Hint(String),
@@ -41,7 +43,7 @@ impl ListRow {
     pub fn as_app(&self) -> Option<usize> {
         match self {
             Self::App(position) => Some(*position),
-            Self::Plugin { .. } | Self::Hint(_) => None,
+            Self::Plugin { .. } | Self::Command(_) | Self::Hint(_) => None,
         }
     }
 
@@ -49,7 +51,7 @@ impl ListRow {
     #[must_use]
     pub fn as_plugin(&self) -> Option<(usize, &PluginResult)> {
         match self {
-            Self::App(_) | Self::Hint(_) => None,
+            Self::App(_) | Self::Command(_) | Self::Hint(_) => None,
             Self::Plugin { plugin, result } => Some((*plugin, result)),
         }
     }
@@ -59,7 +61,23 @@ impl ListRow {
     pub fn as_hint(&self) -> Option<&str> {
         match self {
             Self::Hint(text) => Some(text),
-            Self::App(_) | Self::Plugin { .. } => None,
+            Self::App(_) | Self::Plugin { .. } | Self::Command(_) => None,
+        }
+    }
+}
+
+/// Built-in commands exposed by the launcher itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoltCommand {
+    Settings,
+    Clipboard,
+}
+
+impl BoltCommand {
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Settings => "Settings",
+            Self::Clipboard => "Clipboard",
         }
     }
 }
@@ -135,7 +153,7 @@ impl LauncherState {
     pub fn selected_app(&self) -> Option<&AppEntry> {
         match self.selection.and_then(|position| self.results.get(position)) {
             Some(ListRow::App(position)) => self.apps.get(*position),
-            Some(ListRow::Plugin { .. }) | Some(ListRow::Hint(_)) | None => None,
+            Some(ListRow::Plugin { .. }) | Some(ListRow::Command(_)) | Some(ListRow::Hint(_)) | None => None,
         }
     }
 
@@ -184,7 +202,18 @@ impl LauncherState {
     /// Move the highlight by `delta` (−1 / +1) within the current results,
     /// wrapping around the edges.
     pub fn move_selection(&mut self, delta: isize) {
-        self.selection = move_position(self.selection, self.results.len(), delta);
+        let Some(mut position) = move_position(self.selection, self.results.len(), delta) else {
+            self.selection = None;
+            return;
+        };
+        for _ in 0..self.results.len() {
+            if !matches!(self.results[position], ListRow::Hint(_)) {
+                self.selection = Some(position);
+                return;
+            }
+            position = move_position(Some(position), self.results.len(), delta.signum()).unwrap_or(position);
+        }
+        self.selection = None;
     }
 
     /// Directly set the highlighted row. Used by mouse clicks so the pointer's
@@ -192,7 +221,9 @@ impl LauncherState {
     /// [`Self::selection`] — there is no separate pointer-selection state.
     /// Positions beyond the current result list clamp to `None`.
     pub fn set_selection(&mut self, position: impl Into<Option<usize>>) {
-        self.selection = position.into().filter(|position| *position < self.results.len());
+        self.selection = position.into().filter(|position| {
+            *position < self.results.len() && !matches!(self.results[*position], ListRow::Hint(_))
+        });
     }
 
     /// Recompute the ranked result list for the current query.
@@ -252,7 +283,9 @@ impl LauncherState {
             }
             _ => true,
         });
-        self.selection = if self.results.is_empty() { None } else { Some(0) };
+        self.results.push(ListRow::Command(BoltCommand::Settings));
+        self.results.push(ListRow::Command(BoltCommand::Clipboard));
+        self.selection = self.results.iter().position(|row| !matches!(row, ListRow::Hint(_)));
     }
 }
 
@@ -336,17 +369,37 @@ mod tests {
     fn no_matches_yield_empty_results_and_no_selection() {
         let mut state = LauncherState::new(fixture());
         state_equals(&mut state, "zzzzzz", &[]);
-        assert_eq!(state.selection(), None);
+        assert_eq!(state.selection(), Some(0));
         assert_eq!(state.selected_app(), None);
+    }
+
+    #[test]
+    fn built_in_commands_are_pinned_after_results() {
+        let mut state = LauncherState::new(fixture());
+        assert!(matches!(state.results().last(), Some(ListRow::Command(BoltCommand::Clipboard))));
+        assert!(matches!(state.results().get(state.results().len() - 2), Some(ListRow::Command(BoltCommand::Settings))));
+        state.set_query("zzzzzz");
+        assert_eq!(state.results(), &[ListRow::Command(BoltCommand::Settings), ListRow::Command(BoltCommand::Clipboard)]);
+    }
+
+    #[test]
+    fn hints_cannot_be_selected_directly() {
+        let mut registry = PluginRegistry::new();
+        registry.register(Box::new(launcher_plugins::calculator::CalculatorPlugin));
+        let mut state = LauncherState::with_plugins(fixture(), registry);
+        state.set_query("6/");
+        assert!(matches!(state.results().first(), Some(ListRow::Hint(_))));
+        state.set_selection(Some(0));
+        assert_eq!(state.selection(), None);
     }
 
     #[test]
     fn clearing_the_query_restores_the_full_list() {
         let mut state = LauncherState::new(fixture());
         state.set_query("fire");
-        assert_eq!(state.results().len(), 2);
-        state.clear();
         assert_eq!(state.results().len(), 4);
+        state.clear();
+        assert_eq!(state.results().len(), 6);
         assert_eq!(state.selection(), Some(0));
         assert_eq!(state.query(), "");
     }
@@ -360,18 +413,18 @@ mod tests {
         state.move_selection(1);
         assert_eq!(state.selection(), Some(1));
         state.move_selection(1);
-        assert_eq!(state.selection(), Some(0), "down past the last result wraps");
+        assert_eq!(state.selection(), Some(2), "down reaches the pinned Settings row");
         state.move_selection(-1);
-        assert_eq!(state.selection(), Some(1), "up past the first result wraps");
+        assert_eq!(state.selection(), Some(1), "up returns to the last application");
     }
 
     #[test]
     fn selection_clamps_when_only_one_result() {
         let mut state = LauncherState::new(fixture());
         state.set_query("terminal");
-        assert_eq!(state.results().len(), 1);
+        assert_eq!(state.results().len(), 3);
         state.move_selection(1);
-        assert_eq!(state.selection(), Some(0));
+        assert_eq!(state.selection(), Some(1));
         state.move_selection(-1);
         assert_eq!(state.selection(), Some(0));
     }
@@ -403,11 +456,11 @@ mod tests {
             .map(|i| app(format!("Application {i}"), format!("org.example.app{i}")))
             .collect();
         let mut state = LauncherState::new(apps);
-        assert_eq!(state.results().len(), 5000);
+        assert_eq!(state.results().len(), 5002);
         state.set_query("4999");
         assert_eq!(app_indexes(&state), [4999]);
         state.move_selection(1);
-        assert_eq!(state.selection(), Some(0));
+        assert_eq!(state.selection(), Some(1));
     }
 
     #[test]
@@ -421,7 +474,7 @@ mod tests {
         assert_eq!(state.selection(), Some(0));
         assert_eq!(state.selected_app().map(|a| a.name.as_str()), Some("GNOME Terminal"));
         state.set_query("zzzz");
-        assert_eq!(state.selection(), None);
+        assert_eq!(state.selection(), Some(0));
         assert_eq!(state.selected_app(), None);
     }
 
@@ -500,7 +553,7 @@ mod tests {
         assert_eq!(plugin.id(), "echo");
         assert_eq!(result.title, "echo: hello");
         // "echo: hello" is not a real app query, so only the plugin row shows.
-        assert_eq!(state.results().len(), 1);
+        assert_eq!(state.results().len(), 3);
     }
 
     #[test]
@@ -534,7 +587,7 @@ mod tests {
         assert_eq!(state.selection(), Some(0));
         assert!(state.selected_plugin().is_some());
         state.move_selection(1);
-        assert_eq!(state.selection(), Some(0), "a single result wraps around");
+        assert_eq!(state.selection(), Some(1), "pinned Settings follows the plugin result");
     }
 
     #[test]
@@ -567,7 +620,7 @@ mod tests {
             .collect();
         let mut state = LauncherState::with_plugins(apps, registry);
         state.set_query("application");
-        assert_eq!(state.results().len(), 1 + APP_ROWS_BELOW_PLUGIN);
+        assert_eq!(state.results().len(), 1 + APP_ROWS_BELOW_PLUGIN + 2);
         assert!(matches!(state.results()[0], ListRow::Plugin { .. }));
     }
 
@@ -577,7 +630,7 @@ mod tests {
         registry.register(Box::new(AlwaysMatchEmptyPlugin));
         let mut state = LauncherState::with_plugins(fixture(), registry);
         state.set_query("2 +");
-        assert_eq!(state.results().len(), 1, "a hint row instead of silence");
+        assert_eq!(state.results().len(), 3, "a hint row plus the pinned commands");
         let hint = state.results()[0].as_hint().expect("the row is a hint");
         assert!(hint.contains("try another query"), "hint text: {hint:?}");
         assert_eq!(state.selected_app(), None, "hint rows are never applications");
@@ -638,9 +691,9 @@ mod tests {
         // hint — and nothing else.
         let mut state = calculator_state();
         state.set_query("6/");
-        assert_eq!(state.results().len(), 1, "a single hint, not a stack");
+        assert_eq!(state.results().len(), 3, "a single hint plus the pinned commands");
         assert_eq!(hint_count(&state), 1);
-        assert_eq!(state.selection(), Some(0));
+        assert_eq!(state.selection(), Some(1), "the hint is never selected");
 
         // Completing the expression replaces the hint with the result row.
         state.set_query("6/2");
@@ -690,7 +743,7 @@ mod tests {
         assert_eq!(state.selected_app().map(|a| a.name.as_str()), Some("Firefox Developer Edition"));
         // Arrow keys continue from where the mouse left off.
         state.move_selection(1);
-        assert_eq!(state.selection(), Some(0), "wraps from the mouse position");
+        assert_eq!(state.selection(), Some(2), "the pinned Settings row follows the mouse position");
         state.set_selection(Some(99));
         assert_eq!(state.selection(), None, "out-of-range selections clamp to none");
     }

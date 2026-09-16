@@ -301,13 +301,13 @@ query still restores the full application list.
   work area, drops its border and gets native frosted-glass blur:
 
   ```
-  windowrulev2 = float,      class:^(dev.launcher.gtk)$
-  windowrulev2 = noborder,   class:^(dev.launcher.gtk)$
-  windowrulev2 = blur,       class:^(dev.launcher.gtk)$
-  windowrulev2 = center,     class:^(dev.launcher.gtk)$
+  windowrulev2 = float,      class:^(dev.bolt.gtk)$
+  windowrulev2 = noborder,   class:^(dev.bolt.gtk)$
+  windowrulev2 = blur,       class:^(dev.bolt.gtk)$
+  windowrulev2 = center,     class:^(dev.bolt.gtk)$
   ```
 
-  The `class` pattern matches the GTK application id (`dev.launcher.gtk`,
+  The `class` pattern matches the GTK application id (`dev.bolt.gtk`,
   `DEFAULT_APP_ID` in `launcher-ui`). The blur is owned by Hyprland; the app
   only paints a semi-transparent background (see `appearance.blur_enabled`)
   and never does any blurring itself. Under X11, native compositor blur is

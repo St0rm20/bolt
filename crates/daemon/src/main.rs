@@ -97,6 +97,7 @@ fn spawn_clipboard_monitor(
 
 fn main() {
     let config = load_config();
+    let config_file = config_path();
 
     // Clipboard history is shared between the `clip:` plugin (searches it)
     // and the monitor thread (fills it from the system clipboard). The
@@ -223,6 +224,7 @@ fn main() {
             handle,
             clipboard_history,
             persistence.clone(),
+            config_file,
         );
     });
 

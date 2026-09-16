@@ -17,10 +17,10 @@ use gtk4::gdk::Key;
 use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{Application, ApplicationWindow, EventControllerKey, PropagationPhase};
-use launcher_core::config::Appearance;
+use launcher_core::config::{Appearance, Config, ClipboardRetention};
 use launcher_core::exec;
 use launcher_core::index::AppEntry;
-use launcher_core::launcher_state::LauncherState;
+use launcher_core::launcher_state::{BoltCommand, LauncherState, ListRow};
 use launcher_plugins::PluginAction;
 use launcher_plugins::PluginRegistry;
 use launcher_plugins::clipboard::ClipboardHistory;
@@ -54,10 +54,12 @@ pub struct LauncherWindow {
     /// substitute it with a fake. The window it belongs to owns a reference
     /// only; the construction is delegated to [`ClipboardHistory::sink`].
     clipboard: (),
+    history: Arc<Mutex<ClipboardHistory>>,
     state: RefCell<LauncherState>,
     /// Monotonic generation counter for the fade-in timeline; bumping it
     /// cancels any in-flight fade (e.g. show while still fading out).
     fade_generation: Rc<RefCell<u64>>,
+    config_path: PathBuf,
 }
 
 /// Thread-safe-ish handle used by the IPC layer to command the window.
@@ -121,6 +123,7 @@ impl LauncherWindow {
         plugins: PluginRegistry,
         history: Arc<Mutex<ClipboardHistory>>,
         history_path: Option<PathBuf>,
+        config_path: PathBuf,
     ) -> Rc<Self> {
         let results = results::ResultsView::new();
         let entry = search::new();
@@ -140,7 +143,7 @@ impl LauncherWindow {
 
         let window = ApplicationWindow::builder()
             .application(app)
-            .title("Launcher")
+            .title("Bolt")
             .decorated(false)
             .resizable(false)
             .default_width(appearance.window_width.clamp(320, 1200) as i32)
@@ -157,16 +160,8 @@ impl LauncherWindow {
         row.add_css_class("launcher-search-row");
         row.set_valign(gtk4::Align::Center);
 
-        let search_overlay = gtk4::Overlay::new();
-        search_overlay.set_hexpand(true);
-        search_overlay.set_child(Some(&entry));
-
         let icon = gtk4::Image::new();
-        let icon_path = if theme == "dark" {
-            "icon/bolt.svg"
-        } else {
-            "icon/bolt-light.svg"
-        };
+        let icon_path = "icon/bolt.svg";
         if let Some(path) = std::fs::canonicalize(icon_path).ok() {
             icon.set_from_file(Some(path.to_str().unwrap_or(icon_path)));
         } else {
@@ -177,15 +172,23 @@ impl LauncherWindow {
         icon.set_halign(gtk4::Align::Start);
         icon.set_valign(gtk4::Align::Center);
         icon.set_margin_start(10);
-        search_overlay.add_overlay(&icon);
 
         entry.set_valign(gtk4::Align::Center);
-        row.append(&search_overlay);
+        row.append(&icon);
+        row.append(&entry);
         vbox.append(&row);
         vbox.append(results.widget());
 
         let overlay = gtk4::Overlay::new();
         overlay.set_child(Some(&vbox));
+        let close = gtk4::Button::with_label("×");
+        close.add_css_class("launcher-close");
+        close.set_tooltip_text(Some("Close"));
+        close.set_halign(gtk4::Align::End);
+        close.set_valign(gtk4::Align::Start);
+        close.set_margin_top(8);
+        close.set_margin_end(8);
+        overlay.add_overlay(&close);
 
         window.set_child(Some(&overlay));
 
@@ -195,14 +198,22 @@ impl LauncherWindow {
             surface: vbox,
             results,
             clipboard: ClipboardHistory::sink(),
+            history: history.clone(),
             state: RefCell::new(LauncherState::with_plugins(apps, plugins)),
             fade_generation: Rc::new(RefCell::new(0)),
+            config_path,
         });
 
         this.connect_query_changes();
         this.connect_key_controller();
         this.connect_close_request();
         this.connect_clicks();
+        let weak = Rc::downgrade(&this);
+        close.connect_clicked(move |_| {
+            if let Some(window) = weak.upgrade() {
+                window.hide_and_clear();
+            }
+        });
         this.results.update(&this.state.borrow());
 
         this
@@ -266,6 +277,20 @@ impl LauncherWindow {
     /// hiding and resetting the box. Launching never blocks; a spawn failure
     /// just reports to stderr and resets the query so the user can try again.
     fn activate(&self) {
+        let command = {
+            let state = self.state.borrow();
+            state.selection().and_then(|index| state.results().get(index)).and_then(|row| match row {
+                ListRow::Command(command) => Some(*command),
+                _ => None,
+            })
+        };
+        if let Some(command) = command {
+            match command {
+                BoltCommand::Clipboard => self.query_changed("clip:"),
+                BoltCommand::Settings => self.open_settings_window(),
+            }
+            return;
+        }
         let launch_error = match self.clipboard_action() {
             Some(()) => {
                 self.hide_and_clear();
@@ -397,6 +422,21 @@ impl LauncherWindow {
     fn connect_clicks(self: &Rc<Self>) {
         let weak = Rc::downgrade(self);
         let list = self.results.list().clone();
+        list.set_activate_on_single_click(false);
+        let weak_selection = Rc::downgrade(self);
+        list.connect_row_selected(move |_, row| {
+            let Some(row) = row else { return; };
+            if !row.is_selectable() { return; }
+            let row = row.clone();
+            let weak_selection = weak_selection.clone();
+            glib::idle_add_local_once(move || {
+                let Some(window) = weak_selection.upgrade() else { return; };
+                if let Some(index) = window.results.row_index(&row) {
+                    window.state.borrow_mut().set_selection(Some(index));
+                    window.results.highlight(Some(index));
+                }
+            });
+        });
         list.connect_row_activated(move |_, row| {
             if !row.is_selectable() {
                 return;
@@ -410,6 +450,59 @@ impl LauncherWindow {
                 .unwrap_or_else(|| window.state.borrow().selection().unwrap_or(0));
             window.select_or_activate(index);
         });
+    }
+
+    fn open_settings_window(&self) {
+        let settings = gtk4::Window::builder()
+            .title("Settings")
+            .transient_for(&self.window)
+            .modal(true)
+            .default_width(420)
+            .default_height(250)
+            .resizable(false)
+            .build();
+        settings.add_css_class("launcher");
+        // Theme switching is intentionally disabled until the existing live
+        // theme application path is fixed; this phase stays dark by design.
+        appearance::apply(&settings, &Appearance::default(), "dark");
+        let content = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
+        content.add_css_class("launcher-settings-surface");
+        content.set_spacing(12);
+        content.set_margin_top(18);
+        content.set_margin_bottom(18);
+        content.set_margin_start(18);
+        content.set_margin_end(18);
+        let retention = gtk4::ComboBoxText::new();
+        for value in ClipboardRetention::ALL { retention.append(Some(value.as_toml()), value.as_label()); }
+        let current = Config::load(&self.config_path).unwrap_or_default();
+        retention.set_active_id(Some(current.clipboard.retention.as_toml()));
+        let retention_label = gtk4::Label::new(Some("Clipboard retention"));
+        retention_label.add_css_class("launcher-settings-label");
+        content.append(&retention_label);
+        content.append(&retention);
+        let credit = gtk4::Label::new(Some("by Storm"));
+        credit.add_css_class("launcher-settings-credit");
+        credit.set_margin_top(12);
+        content.append(&credit);
+        let close = gtk4::Button::with_label("Close");
+        close.add_css_class("launcher-settings-close");
+        content.append(&close);
+        settings.set_child(Some(&content));
+        let settings_for_close = settings.clone();
+        close.connect_clicked(move |_| settings_for_close.close());
+        let path = self.config_path.clone();
+        let history = self.history.clone();
+        retention.connect_changed(move |retention| {
+            if let Some(value) = retention.active_id() {
+                let _ = Config::set_toml_string(&path, "clipboard", "retention", value.as_str());
+                if let Some(retention) = ClipboardRetention::parse(value.as_str()) {
+                    if let Ok(mut history) = history.lock() {
+                        history.set_retention_seconds(retention.as_seconds());
+                    }
+                }
+            }
+        });
+        settings.present();
     }
 
     /// Closing the window (compositor close button, Alt+F4, ...) only hides

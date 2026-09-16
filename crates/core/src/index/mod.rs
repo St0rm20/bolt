@@ -131,7 +131,7 @@ impl std::error::Error for IndexerError {
 /// The conventional application directories: the user directory first, then
 /// `/usr/share/applications`.
 pub fn standard_directories() -> Vec<PathBuf> {
-    let mut directories = Vec::with_capacity(4);
+    let mut directories = Vec::with_capacity(5);
     if let Some(user) = user_applications_dir() {
         directories.push(user);
     }
@@ -139,6 +139,7 @@ pub fn standard_directories() -> Vec<PathBuf> {
     // dirs; they come after the user dir and before the system apps dir.
     directories.extend(flatpak_directories());
     directories.push(PathBuf::from("/usr/share/applications"));
+    directories.dedup();
     directories
 }
 
@@ -158,7 +159,6 @@ pub fn flatpak_directories() -> Vec<PathBuf> {
             if candidate.is_dir() {
                 directories.push(candidate);
             }
-            return directories;
         }
     }
     if let Some(home) = std::env::var_os("HOME") {
@@ -171,6 +171,7 @@ pub fn flatpak_directories() -> Vec<PathBuf> {
     if system.is_dir() {
         directories.push(system);
     }
+    directories.dedup();
     directories
 }
 

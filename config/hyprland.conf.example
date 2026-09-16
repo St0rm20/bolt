@@ -1,6 +1,6 @@
 # Hyprland rules for the launcher (add these to ~/.config/hypr/hyprland.conf).
 #
-# `class:^(dev.launcher.gtk)$` matches the GTK application id used by the
+# `class:^(dev.bolt.gtk)$` matches the GTK application id used by the
 # daemon (crates/ui DEFAULT_APP_ID) — Hyprland derives the Wayland app id
 # from it, so the same pattern will also work as `class:` in windowrulev2.
 

@@ -218,6 +218,47 @@ window.launcher viewport {{
     box-shadow: none;
 }}
 
+.launcher-settings-surface {{
+    background-color: {background};
+    color: {fg};
+    border-radius: {radius}px;
+    border: 1px solid {edge};
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.22);
+    padding: 22px;
+}}
+
+.launcher-settings-label {{
+    color: {secondary};
+    font-size: 13px;
+}}
+
+.launcher-settings-credit {{
+    color: {secondary};
+    font-size: 11px;
+}}
+
+.launcher-settings-close {{
+    min-height: 30px;
+    border-radius: 9px;
+    background-color: {elevated};
+    color: {fg};
+}}
+
+.launcher-close {{
+    min-width: 20px;
+    min-height: 20px;
+    padding: 0;
+    border-radius: 999px;
+    background-color: transparent;
+    color: {secondary};
+    border: 1px solid transparent;
+}}
+
+.launcher-close:hover {{
+    background-color: {hover};
+    border-color: {edge};
+}}
+
 .launcher-search:hover {{
     background-color: {hover};
 }}
