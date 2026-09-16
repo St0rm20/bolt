@@ -207,8 +207,8 @@ window.launcher viewport {{
    saturated accent rectangle. Its focus state is a subtle ring, not a
    highlight that dominates the window. */
 .launcher-search {{
-    font-size: 16px;
-    padding: 9px 14px;
+    font-size: 17px;
+    padding: 9px 14px 9px 34px;
     border-radius: 10px;
     background-color: {elevated};
     border: 1px solid {elevated_border};
@@ -232,6 +232,14 @@ window.launcher viewport {{
 .launcher-search placeholder,
 .launcher-search image {{
     color: {secondary};
+    min-width: 38px;
+    min-height: 38px;
+}}
+
+.launcher-search image {{
+    opacity: 0;
+    min-width: 0;
+    min-height: 0;
 }}
 
 .launcher-results {{

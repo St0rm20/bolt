@@ -48,7 +48,6 @@ pub struct LauncherWindow {
     /// Content container. Its CSS class drives the scale-in transition.
     surface: gtk4::Box,
     results: Rc<results::ResultsView>,
-    history: Arc<Mutex<ClipboardHistory>>,
     /// The system clipboard this launcher reads and writes. Pointing at the
     /// real clipboard object would make tests clobber the session's clipboard
     /// (and `ClipboardHistory` unit tests could not assert reliably); tests
@@ -158,6 +157,10 @@ impl LauncherWindow {
         row.add_css_class("launcher-search-row");
         row.set_valign(gtk4::Align::Center);
 
+        let search_overlay = gtk4::Overlay::new();
+        search_overlay.set_hexpand(true);
+        search_overlay.set_child(Some(&entry));
+
         let icon = gtk4::Image::new();
         let icon_path = if theme == "dark" {
             "icon/bolt.svg"
@@ -171,34 +174,18 @@ impl LauncherWindow {
         }
         icon.add_css_class("launcher-brand-icon");
         icon.set_pixel_size(38);
+        icon.set_halign(gtk4::Align::Start);
         icon.set_valign(gtk4::Align::Center);
-        icon.set_margin_end(6);
+        icon.set_margin_start(10);
+        search_overlay.add_overlay(&icon);
 
-        let entry_wrap = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
-        entry_wrap.add_css_class("launcher-entry-wrap");
-        entry_wrap.set_valign(gtk4::Align::Center);
-        entry_wrap.set_margin_start(6);
-        entry_wrap.append(&icon);
         entry.set_valign(gtk4::Align::Center);
-        entry_wrap.append(&entry);
-
-        row.append(&entry_wrap);
+        row.append(&search_overlay);
         vbox.append(&row);
         vbox.append(results.widget());
 
         let overlay = gtk4::Overlay::new();
         overlay.set_child(Some(&vbox));
-
-        let plus_button = gtk4::Button::new();
-        plus_button.add_css_class("launcher-control-button");
-        plus_button.set_label("+");
-        plus_button.set_tooltip_text(Some("Launcher actions"));
-        plus_button.set_focus_on_click(false);
-        plus_button.set_halign(gtk4::Align::Start);
-        plus_button.set_valign(gtk4::Align::End);
-        plus_button.set_margin_start(10);
-        plus_button.set_margin_bottom(10);
-        overlay.add_overlay(&plus_button);
 
         window.set_child(Some(&overlay));
 
@@ -207,7 +194,6 @@ impl LauncherWindow {
             entry,
             surface: vbox,
             results,
-            history: history.clone(),
             clipboard: ClipboardHistory::sink(),
             state: RefCell::new(LauncherState::with_plugins(apps, plugins)),
             fade_generation: Rc::new(RefCell::new(0)),
@@ -217,7 +203,7 @@ impl LauncherWindow {
         this.connect_key_controller();
         this.connect_close_request();
         this.connect_clicks();
-        this.connect_plus_button(&plus_button);
+        this.results.update(&this.state.borrow());
 
         this
     }
@@ -424,77 +410,6 @@ impl LauncherWindow {
                 .unwrap_or_else(|| window.state.borrow().selection().unwrap_or(0));
             window.select_or_activate(index);
         });
-    }
-
-    fn connect_plus_button(self: &Rc<Self>, button: &gtk4::Button) {
-        let weak = Rc::downgrade(self);
-        let popover = gtk4::Popover::new();
-        popover.add_css_class("launcher-panel");
-
-        let contents = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
-        contents.add_css_class("launcher-panel-content");
-        contents.set_margin_top(10);
-        contents.set_margin_bottom(10);
-        contents.set_margin_start(12);
-        contents.set_margin_end(12);
-
-        let settings_label = gtk4::Label::new(Some("Settings"));
-        settings_label.add_css_class("launcher-panel-title");
-        contents.append(&settings_label);
-
-        let theme_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
-        let theme_label = gtk4::Label::new(Some("Theme"));
-        let theme_combo = gtk4::DropDown::from_strings(&["auto", "light", "dark"]);
-        theme_row.append(&theme_label);
-        theme_row.append(&theme_combo);
-        contents.append(&theme_row);
-
-        let retention_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
-        let retention_label = gtk4::Label::new(Some("Retention"));
-        let retention_combo = gtk4::DropDown::from_strings(&["session", "1_day", "1_week", "1_month"]);
-        retention_row.append(&retention_label);
-        retention_row.append(&retention_combo);
-        contents.append(&retention_row);
-
-        let clipboard_label = gtk4::Label::new(Some("Clipboard"));
-        clipboard_label.add_css_class("launcher-panel-title");
-        contents.append(&clipboard_label);
-
-        let clipboard_list = gtk4::ListBox::new();
-        clipboard_list.add_css_class("launcher-panel-list");
-        clipboard_list.set_selection_mode(gtk4::SelectionMode::Single);
-        if let Some(window) = weak.upgrade() {
-            let mut history = window.history.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            for entry in history.search_entries("") {
-                let row = gtk4::ListBoxRow::new();
-                let label = gtk4::Label::new(Some(&entry.text));
-                label.set_xalign(0.0);
-                label.set_wrap(true);
-                row.set_child(Some(&label));
-                clipboard_list.append(&row);
-            }
-        }
-        contents.append(&clipboard_list);
-        popover.set_child(Some(&contents));
-        let button_for_popover = button.clone();
-        button.connect_clicked(move |_| {
-            if let Some(window) = weak.upgrade() {
-                let mut history_guard = window.history.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-                let entries = history_guard.search_entries("");
-                if entries.is_empty() {
-                    let child = clipboard_list.first_child();
-                    if let Some(child) = child {
-                        clipboard_list.remove(&child);
-                    }
-                }
-                let rect = gtk4::gdk::Rectangle::new(0, 0, 1, 1);
-                popover.set_pointing_to(Some(&rect));
-                popover.set_parent(&button_for_popover);
-                popover.popup();
-            }
-        });
-
-        button.insert_action_group("bolt", None::<&gtk4::gio::SimpleActionGroup>);
     }
 
     /// Closing the window (compositor close button, Alt+F4, ...) only hides

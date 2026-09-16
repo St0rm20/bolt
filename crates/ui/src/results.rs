@@ -84,7 +84,9 @@ impl ResultsView {
         self.list.unselect_all();
 
         if state.results().is_empty() {
-            self.list.append(&message_row(&format!("No results for \"{}\"", state.query())));
+            let row = message_row(&format!("No results for \"{}\"", state.query()));
+            self.list.append(&row);
+            self.rows.borrow_mut().push(row);
             return;
         }
 
