@@ -29,6 +29,9 @@ pub struct Config {
     /// back to [`ClipboardConfig::default`].
     #[serde(default)]
     pub clipboard: ClipboardConfig,
+    /// Filesystem search configuration.
+    #[serde(default)]
+    pub files: FileConfig,
 }
 
 /// Visual appearance of the launcher window.
@@ -158,6 +161,25 @@ impl Default for ClipboardConfig {
     }
 }
 
+/// The `[files]` section of the configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileConfig {
+    /// Restrict file results to the current user's home directory.
+    pub restrict_to_home: bool,
+    /// Maximum number of file matches to show.
+    pub max_results: usize,
+}
+
+impl Default for FileConfig {
+    fn default() -> Self {
+        Self {
+            restrict_to_home: true,
+            max_results: 10,
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -166,6 +188,7 @@ impl Default for Config {
             enabled_plugins: Vec::new(),
             appearance: Appearance::default(),
             clipboard: ClipboardConfig::default(),
+            files: FileConfig::default(),
         }
     }
 }

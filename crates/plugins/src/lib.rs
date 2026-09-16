@@ -23,6 +23,7 @@
 pub mod calculator;
 pub mod clipboard;
 pub mod echo;
+pub mod files;
 
 /// An action the UI executes when the user activates (Enter) a result row.
 ///
@@ -32,6 +33,8 @@ pub mod echo;
 pub enum PluginAction {
     /// Copy `text` verbatim to the system clipboard.
     Copy { text: String },
+    /// Open `path` with the system default handler (`xdg-open`).
+    Open { path: String },
 }
 
 /// A single entry produced by a plugin for a given query.
@@ -44,6 +47,10 @@ pub struct PluginResult {
     pub title: String,
     /// Optional secondary line shown under the title.
     pub subtitle: Option<String>,
+    /// Optional icon name for a row; used for file/folder results.
+    pub icon_name: Option<String>,
+    /// Optional label shown at the right edge of the row (e.g. `file`).
+    pub tag: Option<String>,
     /// Optional action run when the row is activated (Enter). `None` for
     /// purely informational rows.
     pub action: Option<PluginAction>,
@@ -55,6 +62,8 @@ impl PluginResult {
         Self {
             title: title.into(),
             subtitle: None,
+            icon_name: None,
+            tag: None,
             action: None,
         }
     }
@@ -65,8 +74,24 @@ impl PluginResult {
         Self {
             title: title.into(),
             subtitle: Some(subtitle.into()),
+            icon_name: None,
+            tag: None,
             action: None,
         }
+    }
+
+    /// Attach an icon name to the row (e.g. `folder`, `text-x-generic`).
+    #[must_use]
+    pub fn with_icon(mut self, icon_name: impl Into<String>) -> Self {
+        self.icon_name = Some(icon_name.into());
+        self
+    }
+
+    /// Attach a right-aligned tag to the row (e.g. `file`).
+    #[must_use]
+    pub fn with_tag(mut self, tag: impl Into<String>) -> Self {
+        self.tag = Some(tag.into());
+        self
     }
 
     /// Attach an action executed when the row is activated (Enter).
@@ -111,6 +136,12 @@ pub trait Plugin {
     /// The results to display for `query`. Only called while
     /// [`Plugin::matches`] returned true.
     fn query(&self, query: &str) -> Vec<PluginResult>;
+
+    /// Optional hint shown when the plugin matched but produced no rows.
+    /// A plugin can use this for database-startup or empty-state guidance.
+    fn empty_hint(&self, _query: &str) -> Option<String> {
+        None
+    }
 }
 
 /// True when `query` starts with `prefix`, compared byte-wise and ignoring
@@ -321,5 +352,39 @@ mod tests {
             .with_action(PluginAction::Copy { text: "1".into() });
         assert_eq!(copy.action, Some(PluginAction::Copy { text: "1".into() }));
         assert_eq!(copy.subtitle.as_deref(), Some("y"), "with_action preserves the rest");
+    }
+
+    #[test]
+    fn plugins_can_supply_a_custom_empty_hint() {
+        struct HintPlugin;
+        impl Plugin for HintPlugin {
+            fn id(&self) -> &str {
+                "hint"
+            }
+            fn name(&self) -> &str {
+                "Hint"
+            }
+            fn prefix(&self) -> Option<&str> {
+                Some("f:")
+            }
+            fn query(&self, _query: &str) -> Vec<PluginResult> {
+                Vec::new()
+            }
+            fn empty_hint(&self, _query: &str) -> Option<String> {
+                Some("The file index is still being built…".to_owned())
+            }
+        }
+
+        let plugin = HintPlugin;
+        assert_eq!(plugin.empty_hint("f:foo"), Some("The file index is still being built…".to_owned()));
+    }
+
+    #[test]
+    fn result_rows_can_carry_icon_and_tag_metadata() {
+        let result = PluginResult::new("README.md")
+            .with_icon("text-x-generic")
+            .with_tag("file");
+        assert_eq!(result.icon_name.as_deref(), Some("text-x-generic"));
+        assert_eq!(result.tag.as_deref(), Some("file"));
     }
 }

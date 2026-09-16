@@ -179,22 +179,45 @@ fn make_plugin_row(result: &PluginResult) -> gtk4::ListBoxRow {
     row.add_css_class("launcher-results-row");
     row.add_css_class("launcher-plugin-row");
 
+    let content = gtk4::Box::new(gtk4::Orientation::Horizontal, 10);
+    content.set_hexpand(true);
+
+    if let Some(icon_name) = &result.icon_name {
+        let icon = gtk4::Image::new();
+        icon.add_css_class("launcher-result-icon");
+        icon.set_icon_name(Some(icon_name));
+        icon.set_pixel_size(22);
+        content.append(&icon);
+    }
+
+    let text = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
+    text.set_hexpand(true);
+
     let title = gtk4::Label::new(Some(&result.title));
     title.add_css_class("launcher-app-name");
     title.set_xalign(0.0);
     title.set_hexpand(true);
+    text.append(&title);
 
-    let lines = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
-    lines.append(&title);
     if let Some(subtitle) = &result.subtitle {
         let subtitle = gtk4::Label::new(Some(subtitle));
         subtitle.add_css_class("launcher-result-subtitle");
         subtitle.set_xalign(0.0);
         subtitle.set_hexpand(true);
-        lines.append(&subtitle);
+        text.append(&subtitle);
     }
 
-    row.set_child(Some(&lines));
+    content.append(&text);
+
+    if let Some(tag) = &result.tag {
+        let tag_label = gtk4::Label::new(Some(tag));
+        tag_label.add_css_class("launcher-app-label");
+        tag_label.set_xalign(1.0);
+        tag_label.set_valign(gtk4::Align::Center);
+        content.append(&tag_label);
+    }
+
+    row.set_child(Some(&content));
     row
 }
 

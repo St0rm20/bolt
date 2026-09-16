@@ -93,6 +93,8 @@ pub struct LauncherState {
     ranker: SearchRanker,
     /// Current search query.
     query: String,
+    /// A transient inline error to show instead of the normal list.
+    error_hint: Option<String>,
     /// The rows currently shown, most relevant first: plugin results while an
     /// active plugin matches the query, ranked applications otherwise (and up
     /// to [`APP_ROWS_BELOW_PLUGIN`] of them below a plugin's rows).
@@ -120,6 +122,7 @@ impl LauncherState {
             plugins,
             ranker: SearchRanker::new(),
             query: String::new(),
+            error_hint: None,
             results: Vec::new(),
             selection: None,
             visible: false,
@@ -191,11 +194,25 @@ impl LauncherState {
     /// Highlighting resets to the first (most relevant) match.
     pub fn set_query(&mut self, query: impl Into<String>) {
         self.query = query.into();
+        self.error_hint = None;
+        self.refresh_results();
+    }
+
+    /// Show a transient inline error in place of the normal results list.
+    pub fn set_error_hint(&mut self, message: impl Into<String>) {
+        self.error_hint = Some(message.into());
+        self.refresh_results();
+    }
+
+    /// Clear the transient inline error and return to the normal list view.
+    pub fn clear_error_hint(&mut self) {
+        self.error_hint = None;
         self.refresh_results();
     }
 
     /// Clear the query; the whole index becomes the result list again.
     pub fn clear(&mut self) {
+        self.error_hint = None;
         self.set_query(String::new());
     }
 
@@ -243,13 +260,24 @@ impl LauncherState {
     /// answers the user with silence. Without a matching plugin the list is
     /// the plain ranking.
     fn refresh_results(&mut self) {
+        if let Some(message) = self.error_hint.clone() {
+            self.results = vec![ListRow::Hint(message)];
+            self.selection = None;
+            return;
+        }
+
         let query = self.query.trim();
         self.results = if query.is_empty() {
             (0..self.apps.len()).map(ListRow::App).collect()
         } else if let Some((plugin, rows)) = self.plugins.dispatch(query) {
             let mut combined = if rows.is_empty() {
                 let plugin_name = self.plugins.get(plugin).map_or("?plugin?", |p| p.name());
-                vec![ListRow::Hint(no_results_hint(plugin_name))]
+                let hint_text = self
+                    .plugins
+                    .get(plugin)
+                    .and_then(|plugin| plugin.empty_hint(query))
+                    .unwrap_or_else(|| no_results_hint(plugin_name));
+                vec![ListRow::Hint(hint_text)]
             } else {
                 rows.into_iter()
                     .map(|result| ListRow::Plugin { plugin, result })

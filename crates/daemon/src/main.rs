@@ -16,6 +16,7 @@ use launcher_plugins::clipboard::{
     ClipboardPlugin, LoadOutcome,
 };
 use launcher_plugins::echo::EchoPlugin;
+use launcher_plugins::files::{detect_file_backend, FileSearchPlugin};
 use launcher_plugins::PluginRegistry;
 use launcher_ui::{CommandHandle, DEFAULT_APP_ID};
 use std::path::PathBuf;
@@ -58,6 +59,11 @@ fn build_plugin_registry(
     registry.register(Box::new(EchoPlugin));
     registry.register(Box::new(CalculatorPlugin));
     registry.register(Box::new(ClipboardPlugin::new(clipboard_history.clone())));
+    registry.register(Box::new(FileSearchPlugin::new(
+        detect_file_backend(config.files.restrict_to_home),
+        config.files.max_results,
+        config.files.restrict_to_home,
+    )));
     if !config.enabled_plugins.is_empty() {
         registry.retain(|plugin| {
             config.enabled_plugins.iter().any(|id| id == plugin.id())

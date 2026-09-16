@@ -291,21 +291,30 @@ impl LauncherWindow {
             }
             return;
         }
-        let launch_error = match self.clipboard_action() {
-            Some(()) => {
+        let launch_error = match self.plugin_action() {
+            Ok(()) => {
                 self.hide_and_clear();
                 return;
             }
-            None => match self.state.borrow().selected_app() {
-                Some(app) => match exec::launch(&app.exec) {
-                    Ok(()) => {
-                        self.hide_and_clear();
-                        return;
-                    }
-                    Err(err) => Some(format!("could not launch {}: {err}", app.name)),
-                },
-                None => None,
+            Err(message) => {
+                self.state.borrow_mut().set_error_hint(message.clone());
+                self.results.update(&self.state.borrow());
+                Some(message)
+            }
+        };
+        if let Some(message) = launch_error {
+            eprintln!("launcher: {message}");
+            return;
+        }
+        let launch_error = match self.state.borrow().selected_app() {
+            Some(app) => match exec::launch(&app.exec) {
+                Ok(()) => {
+                    self.hide_and_clear();
+                    return;
+                }
+                Err(err) => Some(format!("could not launch {}: {err}", app.name)),
             },
+            None => None,
         };
         self.state.borrow_mut().clear();
         search::clear(&self.entry);
@@ -314,17 +323,28 @@ impl LauncherWindow {
         }
     }
 
-    /// Execute the highlighted row's plugin action, when it has one
-    /// (`PluginAction::Copy` puts the text on the system clipboard). Returns
-    /// `Some(())` when an action ran, `None` when the row has none.
-    fn clipboard_action(&self) -> Option<()> {
-        let action = self.state.borrow().selected_plugin_action()?;
-        let PluginAction::Copy { text } = action;
-        // The real clipboard lives on the window; the field is the sink the
-        // window was built with (tests swap in a fake there).
-        let _ = self.clipboard;
-        self.window.clipboard().set_text(&text);
-        Some(())
+    /// Execute the highlighted row's plugin action, when it has one.
+    /// `Copy` writes to the clipboard; `Open` launches `xdg-open`.
+    fn plugin_action(&self) -> Result<(), String> {
+        let action = self.state.borrow().selected_plugin_action().ok_or_else(|| "No plugin action".to_owned())?;
+        match action {
+            PluginAction::Copy { text } => {
+                let _ = self.clipboard;
+                self.window.clipboard().set_text(&text);
+                Ok(())
+            }
+            PluginAction::Open { path } => {
+                let status = std::process::Command::new("xdg-open")
+                    .arg(&path)
+                    .status()
+                    .map_err(|err| format!("could not open {}: {err}", path))?;
+                if status.success() {
+                    Ok(())
+                } else {
+                    Err(format!("could not open {}: no default handler registered", path))
+                }
+            }
+        }
     }
 
     /// Hide the window and reset the search box (next activation starts clean).

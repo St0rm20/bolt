@@ -1,4 +1,4 @@
-enabled_plugins = ["applications", "echo", "calculator", "clipboard"]
+enabled_plugins = ["applications", "echo", "calculator", "clipboard", "files"]
 shortcut = "SUPER+SPACE"
 theme = "dark"
 
@@ -11,3 +11,7 @@ window_width = 640
 
 [clipboard]
 retention = "1_week"
+
+[files]
+restrict_to_home = true
+max_results = 10
