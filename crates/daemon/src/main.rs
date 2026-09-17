@@ -54,16 +54,20 @@ fn load_config() -> Config {
 fn build_plugin_registry(
     config: &Config,
     clipboard_history: &Arc<Mutex<ClipboardHistory>>,
+    runtime: &tokio::runtime::Runtime,
 ) -> PluginRegistry {
     let mut registry = PluginRegistry::new();
     registry.register(Box::new(EchoPlugin));
     registry.register(Box::new(CalculatorPlugin));
     registry.register(Box::new(ClipboardPlugin::new(clipboard_history.clone())));
-    registry.register(Box::new(FileSearchPlugin::new(
-        detect_file_backend(config.files.restrict_to_home),
-        config.files.max_results,
-        config.files.restrict_to_home,
-    )));
+    registry.register(Box::new(
+        FileSearchPlugin::new(
+            detect_file_backend(config.files.restrict_to_home),
+            config.files.max_results,
+            config.files.restrict_to_home,
+        )
+        .with_runtime(runtime.handle().clone()),
+    ));
     if !config.enabled_plugins.is_empty() {
         registry.retain(|plugin| {
             config.enabled_plugins.iter().any(|id| id == plugin.id())
@@ -137,7 +141,15 @@ fn main() {
         }
     }
 
-    let plugins = build_plugin_registry(&config, &clipboard_history);
+    let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("launcher-daemon: could not build runtime: {err}");
+            std::process::exit(1);
+        }
+    };
+
+    let plugins = build_plugin_registry(&config, &clipboard_history, &runtime);
 
     let persistence = retention_seconds.is_some().then(default_history_path);
     let clipboard_running = Arc::new(AtomicBool::new(true));
@@ -171,14 +183,6 @@ fn main() {
 
     // Thread-safe handle so tokio tasks can command the GTK main loop.
     let (handle, ready) = CommandHandle::new();
-
-    let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
-        Ok(runtime) => runtime,
-        Err(err) => {
-            eprintln!("launcher-daemon: could not build runtime: {err}");
-            std::process::exit(1);
-        }
-    };
 
     eprintln!("launcher-daemon: listening on {}", socket_path.display());
     eprintln!(

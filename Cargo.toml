@@ -19,7 +19,7 @@ gtk4 = { version = "0.9", features = ["v4_18"] }
 # GIO/GLib bindings (sibling of gtk4-rs). Used only for the XDG portal
 # `color-scheme` query in the UI crate; otherwise everything is GTK4.
 gio = { version = "0.20" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "process", "signal", "time"] }
 serde = { version = "1", features = ["derive"] }
 toml = "1"
 # JSON for the clipboard-history persistence file (`Vec<String>` round trip).
