@@ -317,35 +317,51 @@ impl LauncherWindow {
     /// hiding and resetting the box. Launching never blocks; a spawn failure
     /// just reports to stderr and resets the query so the user can try again.
     fn activate(&self) {
-        let command = {
+        enum ActivationTarget {
+            Command(BoltCommand),
+            Plugin,
+            App,
+            Inactive,
+        }
+
+        let target = {
             let state = self.state.borrow();
-            state.selection().and_then(|index| state.results().get(index)).and_then(|row| match row {
-                ListRow::Command(command) => Some(*command),
-                _ => None,
-            })
+            state
+                .selection()
+                .and_then(|index| state.results().get(index))
+                .map(|row| match row {
+                    ListRow::Command(command) => ActivationTarget::Command(*command),
+                    ListRow::Plugin { .. } => ActivationTarget::Plugin,
+                    ListRow::App(_) => ActivationTarget::App,
+                    ListRow::Hint(_) => ActivationTarget::Inactive,
+                })
+                .unwrap_or(ActivationTarget::Inactive)
         };
-        if let Some(command) = command {
+
+        if let ActivationTarget::Command(command) = target {
             match command {
                 BoltCommand::Clipboard => self.query_changed("clip:"),
                 BoltCommand::Settings => self.open_settings_window(),
             }
             return;
         }
-        let launch_error = match self.plugin_action() {
-            Ok(()) => {
-                self.hide_and_clear();
-                return;
-            }
-            Err(message) => {
-                self.state.borrow_mut().set_error_hint(message.clone());
-                self.results.update(&self.state.borrow());
-                Some(message)
-            }
-        };
-        if let Some(message) = launch_error {
-            eprintln!("launcher: {message}");
-            return;
+
+        match target {
+            ActivationTarget::Plugin => match self.plugin_action() {
+                Ok(()) => self.hide_and_clear(),
+                Err(message) => {
+                    self.state.borrow_mut().set_error_hint(message.clone());
+                    self.results.update(&self.state.borrow());
+                    eprintln!("launcher: {message}");
+                }
+            },
+            ActivationTarget::App => self.launch_selected_app(),
+            ActivationTarget::Command(_) | ActivationTarget::Inactive => {}
         }
+    }
+
+    /// Launch the selected application and reset the launcher afterward.
+    fn launch_selected_app(&self) {
         let launch_error = match self.state.borrow().selected_app() {
             Some(app) => match exec::launch(&app.exec) {
                 Ok(()) => {
