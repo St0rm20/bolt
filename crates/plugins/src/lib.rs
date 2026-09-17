@@ -142,6 +142,12 @@ pub trait Plugin {
     fn empty_hint(&self, _query: &str) -> Option<String> {
         None
     }
+
+    /// Whether this plugin has an async result still in flight for `query`.
+    /// Default: plugins are synchronous and never pending.
+    fn is_pending(&self, _query: &str) -> bool {
+        false
+    }
 }
 
 /// True when `query` starts with `prefix`, compared byte-wise and ignoring

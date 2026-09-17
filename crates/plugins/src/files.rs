@@ -335,7 +335,7 @@ impl Plugin for FileSearchPlugin {
 
         {
             let state = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            if state.query.as_deref() == Some(filter) && !state.cached_results.is_empty() {
+            if state.query.as_deref() == Some(filter) {
                 return state.cached_results.clone();
             }
         }
@@ -439,6 +439,14 @@ impl Plugin for FileSearchPlugin {
             return Some("No files matched this query.".to_owned());
         }
         None
+    }
+
+    fn is_pending(&self, query: &str) -> bool {
+        let Some(filter) = self.trimmed_query(query) else {
+            return false;
+        };
+        let state = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.query.as_deref() == Some(filter) && state.searching
     }
 }
 

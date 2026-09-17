@@ -190,6 +190,20 @@ impl LauncherState {
         self.visible = visible;
     }
 
+    /// Whether the plugin active for the current query has an async result in
+    /// flight.
+    pub fn is_pending(&self) -> bool {
+        let query = self.query.trim();
+        if query.is_empty() {
+            return false;
+        }
+        self.plugins
+            .plugins()
+            .iter()
+            .find(|plugin| plugin.matches(query))
+            .is_some_and(|plugin| plugin.is_pending(query))
+    }
+
     /// Replace the search query and recompute the ranked results.
     /// Highlighting resets to the first (most relevant) match.
     pub fn set_query(&mut self, query: impl Into<String>) {

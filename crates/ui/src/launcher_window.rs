@@ -37,6 +37,7 @@ use crate::{results, search};
 /// steps. 120 ms total, in line with the Apple-style motion guidance.
 const FADE_STEP_MS: u64 = 12;
 const FADE_FRAMES: u32 = 10;
+const PENDING_POLL_MS: u64 = 150;
 
 /// Window height the search box + default results fit into without scrolling.
 const WINDOW_HEIGHT: i32 = 460;
@@ -59,6 +60,11 @@ pub struct LauncherWindow {
     /// Monotonic generation counter for the fade-in timeline; bumping it
     /// cancels any in-flight fade (e.g. show while still fading out).
     fade_generation: Rc<RefCell<u64>>,
+    /// Monotonic generation counter for pending-result polling.
+    pending_generation: Rc<RefCell<u64>>,
+    /// Back-reference used by the pending-result timer without creating a
+    /// reference cycle.
+    pending_window: RefCell<std::rc::Weak<LauncherWindow>>,
     config_path: PathBuf,
 }
 
@@ -201,9 +207,12 @@ impl LauncherWindow {
             history: history.clone(),
             state: RefCell::new(LauncherState::with_plugins(apps, plugins)),
             fade_generation: Rc::new(RefCell::new(0)),
+            pending_generation: Rc::new(RefCell::new(0)),
+            pending_window: RefCell::new(std::rc::Weak::new()),
             config_path,
         });
 
+        *this.pending_window.borrow_mut() = Rc::downgrade(&this);
         this.connect_query_changes();
         this.connect_key_controller();
         this.connect_close_request();
@@ -250,8 +259,39 @@ impl LauncherWindow {
 
     /// The search text changed: recompute results and re-highlight.
     fn query_changed(&self, query: &str) {
+        *self.pending_generation.borrow_mut() += 1;
         self.state.borrow_mut().set_query(query);
         self.results.update(&self.state.borrow());
+        if self.state.borrow().is_pending() {
+            self.poll_pending_results();
+        }
+    }
+
+    /// Refresh results until the active plugin finishes its async work. A
+    /// newer query invalidates this timer through `pending_generation`.
+    fn poll_pending_results(&self) {
+        let generation = *self.pending_generation.borrow();
+        let generation_cell = self.pending_generation.clone();
+        let weak = self.pending_window.borrow().clone();
+        glib::source::timeout_add_local(Duration::from_millis(PENDING_POLL_MS), move || {
+            if *generation_cell.borrow() != generation {
+                return glib::ControlFlow::Break;
+            }
+            let Some(window) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            if !window.state.borrow().is_visible() {
+                return glib::ControlFlow::Break;
+            }
+            let query = window.entry.text();
+            window.state.borrow_mut().set_query(query);
+            window.results.update(&window.state.borrow());
+            if window.state.borrow().is_pending() {
+                glib::ControlFlow::Continue
+            } else {
+                glib::ControlFlow::Break
+            }
+        });
     }
 
     /// Update selection on row clicks. A click on an unselected row selects it;
